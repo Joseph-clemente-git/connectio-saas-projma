@@ -18,7 +18,7 @@ import { useOrgMembersWithUsers, useOrgUsage } from '@/hooks/use-session-data'
 import { LoadingScreen } from '@/components/shared/loading-screen'
 import { LinksManager } from '@/components/shared/links-manager'
 import type { ProjectStatus } from '@/types/domain'
-import { WORKFLOW_PRESETS, stagesForPreset, terminologyForPreset, workflowStages } from '@/lib/project-workflow'
+import { eligibleReviewerIds, WORKFLOW_PRESETS, stagesForPreset, terminologyForPreset, workflowStages } from '@/lib/project-workflow'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { FileExplorer } from '@/components/files/file-explorer'
 import { AnnouncementsAlert, PinsAndAnnouncements } from '@/components/shared/pins-and-announcements'
@@ -76,7 +76,7 @@ export function WorkspaceDetailPage() {
   const [savingWorkspace, setSavingWorkspace] = useState(false)
 
   async function create() {
-    if (!name.trim() || !workspaceId) return
+    if (!canManage || !name.trim() || !workspaceId) return
     const projectId = crypto.randomUUID()
     const selectedWorkflowSet = workflowSets?.find((set) => set.id === workflowPreset)
     await db.projects.add({
@@ -105,7 +105,7 @@ export function WorkspaceDetailPage() {
   }
 
   function openProjectCreator() {
-    if (!workspace) return
+    if (!workspace || !canManage) return
     const defaultPreset = WORKFLOW_PRESETS[workspace.workflowPreset ?? ''] ? workspace.workflowPreset! : 'general'
     setName('')
     setDescription('')
@@ -172,13 +172,15 @@ export function WorkspaceDetailPage() {
                 Edit workspace
               </Button>
             )}
-            <LimitButton
-              plan={plan}
-              limitKey="projects"
-              current={usage?.projects ?? 0}
-              label="New project"
-              onClick={openProjectCreator}
-            />
+            {canManage && (
+              <LimitButton
+                plan={plan}
+                limitKey="projects"
+                current={usage?.projects ?? 0}
+                label="New project"
+                onClick={openProjectCreator}
+              />
+            )}
           </>
         }
       />
@@ -189,7 +191,7 @@ export function WorkspaceDetailPage() {
       <TabsContent value="projects" className="mt-0 flex-1 overflow-y-auto p-6">
         {projects && projects.length > 0 ? (
           <div className="space-y-8">
-            <WorkspaceProjectOverview projects={projects} tasks={allTasks ?? []} />
+            <WorkspaceProjectOverview projects={projects} tasks={allTasks ?? []} teams={teams ?? []} />
             <section aria-labelledby="project-details-heading" className="space-y-4">
               <div>
                 <h2 id="project-details-heading" className="text-lg font-semibold text-foreground">Project details</h2>
@@ -203,7 +205,7 @@ export function WorkspaceDetailPage() {
               const reviewStageIds = new Set(stages.filter((stage) => stage.requiresReview).map((stage) => stage.id))
               const approved = tasks.filter((task) => task.status === finalStageId && (reviewStageIds.size === 0 || task.reviewState === 'approved')).length
               const hasReviewRisk = tasks.some((task) =>
-                (reviewStageIds.has(task.status) && (!task.reviewerId || task.reviewerId === task.assigneeId)) ||
+                (reviewStageIds.has(task.status) && eligibleReviewerIds(p, stages.find((stage) => stage.id === task.status), teams ?? [], task.assigneeId).length === 0) ||
                 (task.status === finalStageId && reviewStageIds.size > 0 && task.reviewState !== 'approved'),
               )
               const needsAttention = tasks.some((task) =>
@@ -215,7 +217,7 @@ export function WorkspaceDetailPage() {
                 ? SCHEDULE_HEALTH_VARIANT[scheduleHealth.status]
                 : liveStatus === 'Complete' || liveStatus === 'On track' ? 'success' : liveStatus === 'Not started' ? 'secondary' : 'warning'
               return (
-              <Link key={p.id} to={`../projects/${p.id}`} className="rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2">
+              <Link key={p.id} data-tour-project={p.id} to={`../projects/${p.id}`} className="rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2">
               <Card className="h-full cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-md">
                 <CardHeader className="flex-row items-start justify-between space-y-0">
                   <div className="flex items-center gap-2">
@@ -244,8 +246,8 @@ export function WorkspaceDetailPage() {
             icon={FolderKanban}
             title="No projects yet"
             description="Create your first project in this workspace."
-            actionLabel="New project"
-            onAction={openProjectCreator}
+            actionLabel={canManage ? 'New project' : undefined}
+            onAction={canManage ? openProjectCreator : undefined}
           />
         )}
       </TabsContent>
@@ -332,7 +334,7 @@ export function WorkspaceDetailPage() {
                 <p className="text-xs text-muted-foreground">{workflowSets?.find((set) => set.id === workflowPreset) ? 'This project will stay linked to the reusable template and receive future template updates.' : `${WORKFLOW_PRESETS[workflowPreset].description} This creates custom settings you can maintain from the project’s Settings tab.`}</p>
               </div>
               <div className="flex flex-col gap-2">
-                <Label>Independent reviewer</Label>
+                <Label>Default reviewer</Label>
                 <Select value={reviewerId} onValueChange={setReviewerId}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -340,7 +342,7 @@ export function WorkspaceDetailPage() {
                     {members?.filter(({ user }) => user.id !== currentUser.id).map(({ user }) => <SelectItem key={user.id} value={user.id}>{user.name}</SelectItem>)}
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-muted-foreground">You start as manager and work coordinator. The reviewer must be independent.</p>
+                <p className="text-xs text-muted-foreground">Automatically reviews tasks when a review stage has no named people or teams. You start as manager and work coordinator, so choose someone else.</p>
               </div>
             </div>
             {workspace.workflowStages?.length ? <p className="text-xs text-muted-foreground">This workspace defaults to {WORKFLOW_PRESETS[workspaceWorkflowPreset]?.name ?? 'custom'} settings. Reusable templates remain linked; built-in presets create custom project settings.</p> : null}

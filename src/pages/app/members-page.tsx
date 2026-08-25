@@ -22,6 +22,7 @@ import { hasFeature, limitLabel } from '@/lib/entitlements'
 import { canManageOrg } from '@/lib/permissions'
 import { format } from 'date-fns'
 import { provisionInvitedMember } from '@/lib/auth'
+import { workflowStages } from '@/lib/project-workflow'
 
 const ROLE_LABEL: Record<string, string> = { owner: 'Owner', admin: 'Admin', member: 'Member' }
 
@@ -73,9 +74,10 @@ export function MembersPage() {
 
   async function removeMember(memberId: string, userId: string) {
     await db.orgMembers.delete(memberId)
+    const workflowSets = await db.workflowSets.where('orgId').equals(org.id).toArray()
     const projectIds = new Set((projects ?? []).map((project) => project.id))
     const affectedTasks = (await db.tasks.toArray()).filter(
-      (task) => projectIds.has(task.projectId) && (task.assigneeId === userId || task.reviewerId === userId),
+      (task) => projectIds.has(task.projectId) && task.assigneeId === userId,
     )
     await Promise.all(
       [
@@ -86,19 +88,38 @@ export function MembersPage() {
           }),
         ),
         ...(projects ?? [])
-          .filter((project) => project.leadId === userId || project.coordinatorId === userId || project.reviewerId === userId)
+          .filter((project) => project.leadId === userId || project.coordinatorId === userId || project.reviewerId === userId || project.workflowStages?.some((stage) => stage.reviewerIds?.includes(userId)))
           .map((project) => db.projects.update(project.id, {
             leadId: project.leadId === userId ? undefined : project.leadId,
             coordinatorId: project.coordinatorId === userId ? undefined : project.coordinatorId,
             reviewerId: project.reviewerId === userId ? undefined : project.reviewerId,
+            workflowStages: project.workflowStages?.map((stage) => ({
+              ...stage,
+              reviewerIds: stage.reviewerIds?.filter((id) => id !== userId),
+            })),
           })),
-        ...affectedTasks.map((task) => db.tasks.update(task.id, {
-          assigneeId: task.assigneeId === userId ? undefined : task.assigneeId,
-          reviewerId: task.reviewerId === userId ? undefined : task.reviewerId,
-          status: task.status === 'done' ? 'in_progress' : task.status,
-          reviewState: undefined,
-          reviewedAt: undefined,
-        })),
+        ...workflowSets
+          .filter((set) => set.workflowStages.some((stage) => stage.reviewerIds?.includes(userId)))
+          .map((set) => db.workflowSets.update(set.id, {
+            workflowStages: set.workflowStages.map((stage) => ({
+              ...stage,
+              reviewerIds: stage.reviewerIds?.filter((id) => id !== userId),
+            })),
+            updatedAt: new Date().toISOString(),
+          })),
+        ...affectedTasks.map((task) => {
+          const project = projects?.find((item) => item.id === task.projectId)
+          const stages = project ? workflowStages(project) : []
+          const finalStageId = stages.at(-1)?.id
+          const reviewStageIndex = stages.findIndex((stage) => stage.requiresReview)
+          const reworkStageId = stages[Math.max(reviewStageIndex - 1, 0)]?.id ?? stages[0]?.id ?? task.status
+          return db.tasks.update(task.id, {
+            assigneeId: undefined,
+            status: task.status === finalStageId ? reworkStageId : task.status,
+            reviewState: undefined,
+            reviewedAt: undefined,
+          })
+        }),
       ],
     )
   }

@@ -85,6 +85,7 @@ export function ReleaseNotesPanel({ orgId, currentUser, workspaceId, projectId, 
     setSelectedProjectId(value); setRelatedTaskIds([]); setRelatedMilestoneIds([])
   }
   async function save() {
+    if (!canManage) return
     if (!title.trim() || !description.trim()) return
     const selectedFiles = (files ?? []).filter((file) => attachmentIds.includes(file.id))
     const now = new Date().toISOString()

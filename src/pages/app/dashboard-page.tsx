@@ -49,7 +49,7 @@ export function DashboardPage() {
       <PageHeader title="Dashboard" description={`Live overview of ${org.name}`} />
 
       <div className="flex flex-col gap-6 p-6">
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div data-tour="dashboard-summary" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard
             label="Teams"
             value={usageLabel(usage?.teams ?? 0, plan.limits.teams)}

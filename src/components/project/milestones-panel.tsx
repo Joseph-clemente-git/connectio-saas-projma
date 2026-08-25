@@ -59,6 +59,7 @@ export function MilestonesPanel({ projectId, canManage, finalStageId }: { projec
     setOpen(true)
   }
   async function save() {
+    if (!canManage) return
     if (!name.trim() || !dueDate) return
     const values = { name: name.trim(), dueDate: new Date(dueDate).toISOString() }
     if (editingId) await db.milestones.update(editingId, values)

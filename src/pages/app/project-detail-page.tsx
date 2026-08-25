@@ -25,13 +25,13 @@ import { FeatureGate } from '@/components/shared/feature-lock'
 import { FileExplorer } from '@/components/files/file-explorer'
 import { AnnouncementsAlert, PinsAndAnnouncements } from '@/components/shared/pins-and-announcements'
 import { hasFeature } from '@/lib/entitlements'
-import { canManageOrg } from '@/lib/permissions'
+import { canManageOrg, canManageProject as userCanManageProject } from '@/lib/permissions'
 import { useOrgMemberRole, useOrgMembersWithUsers } from '@/hooks/use-session-data'
 import type { MilestoneStatus, ProjectStatus } from '@/types/domain'
 import { RecurringReportsPanel } from '@/components/shared/recurring-reports-panel'
 import { ReleaseNotesPanel } from '@/components/project/release-notes-panel'
 import { calculateScheduleHealth, calculateTaskProgress, SCHEDULE_HEALTH_LABEL, SCHEDULE_HEALTH_VARIANT } from '@/lib/schedule-health'
-import { DEFAULT_TERMINOLOGY, workflowStages } from '@/lib/project-workflow'
+import { DEFAULT_TERMINOLOGY, eligibleReviewerIds, workflowStages } from '@/lib/project-workflow'
 import { ProjectSettingsPanel } from '@/components/project/project-settings-panel'
 import { useMilestoneCompletion } from '@/hooks/use-milestone-completion'
 
@@ -85,7 +85,10 @@ export function ProjectDetailPage() {
   )
   const taskStats = useLiveQuery(async () => {
     if (!projectId) return undefined
-    const tasks = await db.tasks.where('projectId').equals(projectId).toArray()
+    const [tasks, teams] = await Promise.all([
+      db.tasks.where('projectId').equals(projectId).toArray(),
+      project ? db.teams.where('orgId').equals(project.orgId).toArray() : [],
+    ])
     return {
       total: tasks.length,
       done: tasks.filter((t) => t.status === finalStageId && (reviewStageIds.size === 0 || t.reviewState === 'approved')).length,
@@ -94,7 +97,7 @@ export function ProjectDetailPage() {
       inReview: tasks.filter((t) => reviewStageIds.has(t.status)).length,
       unassigned: tasks.filter((t) => t.status !== finalStageId && !t.assigneeId).length,
       reviewRisks: tasks.filter((t) =>
-        (reviewStageIds.has(t.status) && (!t.reviewerId || t.reviewerId === t.assigneeId)) ||
+        (reviewStageIds.has(t.status) && eligibleReviewerIds(project!, stages.find((stage) => stage.id === t.status), teams, t.assigneeId).length === 0) ||
         (t.status === finalStageId && reviewStageIds.size > 0 && t.reviewState !== 'approved'),
       ).length,
       overdue: tasks.filter((t) => t.status !== finalStageId && t.dueDate && new Date(t.dueDate) < new Date()).length,
@@ -111,7 +114,7 @@ export function ProjectDetailPage() {
   }, [projectId])
   const members = useOrgMembersWithUsers(org.id)
   const myMembership = useOrgMemberRole(org.id, currentUser.id)
-  const canManage = canManageOrg(myMembership)
+  const canManageOrganization = canManageOrg(myMembership)
 
   if (project === undefined) return <LoadingScreen />
   if (!project) {
@@ -121,7 +124,8 @@ export function ProjectDetailPage() {
       </div>
     )
   }
-  const canManageProject = canManage || project.leadId === currentUser.id
+  const canManageProject = userCanManageProject(project, currentUser.id)
+  const canEditTasks = Boolean(myMembership)
   const terminology = project.terminology ?? DEFAULT_TERMINOLOGY
 
   const scheduleHealth = calculateScheduleHealth(project.startDate, project.endDate, taskStats?.actualProgress ?? 0)
@@ -166,7 +170,7 @@ export function ProjectDetailPage() {
         }}
         className="flex flex-1 flex-col"
       >
-        <div className="scrollbar-thin overflow-x-auto border-b border-border bg-card px-6 py-3">
+        <div data-tour="project-tabs" className="scrollbar-thin overflow-x-auto border-b border-border bg-card px-6 py-3">
           <div className="flex w-max min-w-full items-center justify-between gap-6">
             <TabsList aria-label="Project work views" className="w-max">
               <TabsTrigger value="overview">Overview</TabsTrigger>
@@ -227,7 +231,7 @@ export function ProjectDetailPage() {
                         disabled={!canManageProject}
                         value={project.startDate ? project.startDate.slice(0, 10) : ''}
                         onChange={(e) =>
-                          db.projects.update(project.id, {
+                          canManageProject && db.projects.update(project.id, {
                             startDate: e.target.value ? new Date(e.target.value).toISOString() : undefined,
                           })
                         }
@@ -244,7 +248,7 @@ export function ProjectDetailPage() {
                         disabled={!canManageProject}
                         value={project.endDate ? project.endDate.slice(0, 10) : ''}
                         onChange={(e) =>
-                          db.projects.update(project.id, {
+                          canManageProject && db.projects.update(project.id, {
                             endDate: e.target.value ? new Date(e.target.value).toISOString() : undefined,
                           })
                         }
@@ -293,7 +297,7 @@ export function ProjectDetailPage() {
                   <div><p className="text-lg font-semibold text-foreground">{taskStats?.overdue ?? 0}</p><p className="text-xs text-muted-foreground">Overdue</p></div>
                 </div>
                 {(taskStats?.reviewRisks ?? 0) > 0 && (
-                  <div className="flex gap-2 rounded-lg bg-warning/10 p-3 text-xs text-warning"><AlertTriangle className="size-4 shrink-0" /> {taskStats?.reviewRisks} task(s) need an independent reviewer.</div>
+                  <div className="flex gap-2 rounded-lg bg-warning/10 p-3 text-xs text-warning"><AlertTriangle className="size-4 shrink-0" /> {taskStats?.reviewRisks} task(s) need a reviewer configured in the project flow.</div>
                 )}
                 <div className="flex items-center justify-between text-sm">
                   <span className="flex items-center gap-2 text-muted-foreground">
@@ -325,11 +329,11 @@ export function ProjectDetailPage() {
         </TabsContent>
 
         <TabsContent value="board" className="flex flex-1 flex-col">
-          <KanbanBoard project={project} orgId={org.id} currentUserId={currentUser.id} canManage={canManageProject} />
+          <KanbanBoard project={project} orgId={org.id} currentUserId={currentUser.id} canManage={canEditTasks} />
         </TabsContent>
 
         <TabsContent value="task-data" className="mt-0 flex-1 overflow-y-auto">
-          <TaskImportExportPanel project={project} orgId={org.id} currentUserId={currentUser.id} canManage={canManageProject} />
+          <TaskImportExportPanel project={project} orgId={org.id} currentUserId={currentUser.id} canManage={canEditTasks} />
         </TabsContent>
 
         <TabsContent value="reports" className="mt-0 flex-1 overflow-y-auto">
@@ -345,15 +349,15 @@ export function ProjectDetailPage() {
         </TabsContent>
 
         <TabsContent value="links" className="flex-1 overflow-y-auto p-6">
-          <LinksManager orgId={org.id} currentUser={currentUser} projectId={project.id} />
+          <LinksManager orgId={org.id} currentUser={currentUser} projectId={project.id} canManage={canManageProject} />
         </TabsContent>
 
         <TabsContent value="files" className="mt-0 flex min-h-0 flex-1">
-          <FileExplorer orgId={org.id} userId={currentUser.id} plan={plan} workspaceId={project.workspaceId} projectId={project.id} title={`${project.name} files`} />
+          <FileExplorer orgId={org.id} userId={currentUser.id} plan={plan} workspaceId={project.workspaceId} projectId={project.id} title={`${project.name} files`} canManage={canManageProject} />
         </TabsContent>
 
         <TabsContent value="pinned" className="mt-0 flex-1 overflow-y-auto">
-          <PinsAndAnnouncements orgId={org.id} currentUser={currentUser} projectId={project.id} canAnnounce={canManageProject} />
+          <PinsAndAnnouncements orgId={org.id} currentUser={currentUser} projectId={project.id} canAnnounce={canManageProject} canManage={canManageProject} />
         </TabsContent>
 
         <TabsContent value="milestones" className="flex flex-1 flex-col">
@@ -383,9 +387,11 @@ export function ProjectDetailPage() {
                   Manage this project&apos;s responsibilities, delivery stages, review rules, and terminology.
                 </p>
               </div>
-              <Button asChild variant="outline" size="sm">
-                <Link to={`/app/${org.slug}/settings/workflows?view=templates`}>Manage reusable templates</Link>
-              </Button>
+              {canManageOrganization && canManageProject && (
+                <Button asChild variant="outline" size="sm">
+                  <Link to={`/app/${org.slug}/settings/workflows?view=templates`}>Manage reusable templates</Link>
+                </Button>
+              )}
             </div>
             <ProjectSettingsPanel
               project={project}

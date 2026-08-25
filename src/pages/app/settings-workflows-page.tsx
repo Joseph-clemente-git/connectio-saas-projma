@@ -34,7 +34,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { canManageOrg } from '@/lib/permissions'
+import { canManageOrg, canManageProject } from '@/lib/permissions'
 import { useOrgMemberRole, useOrgMembersWithUsers } from '@/hooks/use-session-data'
 import {
   DEFAULT_TERMINOLOGY,
@@ -66,6 +66,7 @@ export function SettingsWorkflowsPage() {
   const members = useOrgMembersWithUsers(org.id)
   const membership = useOrgMemberRole(org.id, user.id)
   const canManage = canManageOrg(membership)
+  const manageableProjects = projects?.filter((project) => canManageProject(project, user.id)) ?? []
 
   const requestedView = searchParams.get('view')
   const activeView: SettingsView = requestedView === 'custom' ? 'custom' : 'templates'
@@ -84,13 +85,14 @@ export function SettingsWorkflowsPage() {
   const [pendingAction, setPendingAction] = useState<PendingAction>(null)
 
   const selectedSet = workflowSets?.find((set) => set.id === selectedSetId) ?? workflowSets?.[0]
-  const selectedProject = projects?.find((item) => item.id === projectId) ?? projects?.[0]
+  const selectedProject = manageableProjects.find((item) => item.id === projectId) ?? manageableProjects[0]
   const selectedUseCount = selectedSet
     ? projects?.filter((project) => project.workflowSetId === selectedSet.id).length ?? 0
     : 0
   const projectSource = workflowSets?.find((set) => set.id === selectedProject?.workflowSetId)
 
   function openEditor(set?: WorkflowSet) {
+    if (!canManage) return
     setEditingSetId(set?.id ?? null)
     setSetName(set?.name ?? '')
     setSetDescription(set?.description ?? '')
@@ -107,11 +109,16 @@ export function SettingsWorkflowsPage() {
   }
 
   async function saveSet() {
+    if (!canManage) return
     const name = setName.trim()
     const workflowStages = setStages
       .map((stage) => ({ ...stage, name: stage.name.trim() }))
       .filter((stage) => stage.name)
     if (!name || workflowStages.length === 0) return
+    if (editingSetId && projects?.some((project) => project.workflowSetId === editingSetId && !canManageProject(project, user.id))) {
+      setNotice('This template is linked to a project led by another member and cannot be changed here.')
+      return
+    }
 
     setPendingAction('save')
     try {
@@ -129,7 +136,7 @@ export function SettingsWorkflowsPage() {
           await db.projects
             .where('orgId')
             .equals(org.id)
-            .filter((project) => project.workflowSetId === editingSetId)
+            .filter((project) => project.workflowSetId === editingSetId && canManageProject(project, user.id))
             .modify((project) => {
               project.workflowStages = workflowStages.map((stage) => ({ ...stage }))
               project.terminology = { ...setTerminology }
@@ -162,7 +169,7 @@ export function SettingsWorkflowsPage() {
   async function applySet() {
     if (!selectedSet || !applyProjectId) return
     const target = projects?.find((project) => project.id === applyProjectId)
-    if (!target) return
+    if (!target || !canManageProject(target, user.id)) return
 
     setPendingAction('apply')
     try {
@@ -179,7 +186,12 @@ export function SettingsWorkflowsPage() {
   }
 
   async function deleteSet() {
-    if (!deleteTarget) return
+    if (!canManage || !deleteTarget) return
+    if (projects?.some((project) => project.workflowSetId === deleteTarget.id && !canManageProject(project, user.id))) {
+      setNotice('This template is linked to a project led by another member and cannot be deleted.')
+      setDeleteTarget(null)
+      return
+    }
     setPendingAction('delete')
     try {
       await db.transaction('rw', db.workflowSets, db.projects, async () => {
@@ -289,8 +301,8 @@ export function SettingsWorkflowsPage() {
                         </div>
                         {canManage && (
                           <div className="flex shrink-0 gap-2">
-                            <Button variant="outline" size="sm" onClick={() => openEditor(selectedSet)}><Pencil aria-hidden="true" /> Edit</Button>
-                            <Button variant="ghost" size="icon" aria-label={`Delete ${selectedSet.name}`} onClick={() => setDeleteTarget(selectedSet)}><Trash2 aria-hidden="true" className="text-destructive" /></Button>
+                            <Button variant="outline" size="sm" disabled={projects?.some((project) => project.workflowSetId === selectedSet.id && !canManageProject(project, user.id))} onClick={() => openEditor(selectedSet)}><Pencil aria-hidden="true" /> Edit</Button>
+                            <Button variant="ghost" size="icon" disabled={projects?.some((project) => project.workflowSetId === selectedSet.id && !canManageProject(project, user.id))} aria-label={`Delete ${selectedSet.name}`} onClick={() => setDeleteTarget(selectedSet)}><Trash2 aria-hidden="true" className="text-destructive" /></Button>
                           </div>
                         )}
                       </CardHeader>
@@ -305,12 +317,12 @@ export function SettingsWorkflowsPage() {
                           </div>
                           <div className="space-y-2">
                             <Label htmlFor="apply-set-project">Project</Label>
-                            <Select value={applyProjectId} onValueChange={setApplyProjectId} disabled={!canManage || pendingAction === 'apply'}>
+                            <Select value={applyProjectId} onValueChange={setApplyProjectId} disabled={!manageableProjects.length || pendingAction === 'apply'}>
                               <SelectTrigger id="apply-set-project"><SelectValue placeholder="Choose a project" /></SelectTrigger>
-                              <SelectContent>{projects?.map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}</SelectContent>
+                              <SelectContent>{manageableProjects.map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}</SelectContent>
                             </Select>
                           </div>
-                          <Button onClick={() => void applySet()} disabled={!canManage || !applyProjectId || pendingAction === 'apply'}>
+                          <Button onClick={() => void applySet()} disabled={!applyProjectId || pendingAction === 'apply'}>
                             {pendingAction === 'apply' ? <Loader2 aria-hidden="true" className="animate-spin" /> : <FolderInput aria-hidden="true" />}
                             {pendingAction === 'apply' ? 'Linking…' : 'Link template'}
                           </Button>
@@ -356,8 +368,8 @@ export function SettingsWorkflowsPage() {
           </TabsContent>
 
           <TabsContent value="custom" className="mt-0 min-w-0 flex-1">
-            {!projects ? null : projects.length === 0 ? (
-              <Card><CardContent className="p-6 sm:p-10"><EmptyState icon={Route} title="No projects yet" description="Create a project before configuring project-specific settings." /></CardContent></Card>
+            {!projects ? null : manageableProjects.length === 0 ? (
+              <Card><CardContent className="p-6 sm:p-10"><EmptyState icon={Route} title="No projects assigned" description="Only the assigned project leader can configure project-specific settings." /></CardContent></Card>
             ) : selectedProject && (
               <div className="space-y-5">
                 <Card>
@@ -370,7 +382,7 @@ export function SettingsWorkflowsPage() {
                       <Label htmlFor="settings-project">Project</Label>
                       <Select value={selectedProject.id} onValueChange={setProjectId}>
                         <SelectTrigger id="settings-project"><SelectValue /></SelectTrigger>
-                        <SelectContent>{projects.map((item) => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}</SelectContent>
+                        <SelectContent>{manageableProjects.map((item) => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}</SelectContent>
                       </Select>
                     </div>
                   </CardContent>
@@ -382,9 +394,9 @@ export function SettingsWorkflowsPage() {
                     <TabsTrigger value="responsibilities">Responsibilities</TabsTrigger>
                     <TabsTrigger value="terminology">Terminology</TabsTrigger>
                   </TabsList>
-                  <TabsContent value="workflow"><ProjectOperatingModel project={selectedProject} members={members?.map(({ user: member }) => member) ?? []} canManage={canManage || selectedProject.leadId === user.id} section="workflow" /></TabsContent>
-                  <TabsContent value="responsibilities"><ProjectOperatingModel project={selectedProject} members={members?.map(({ user: member }) => member) ?? []} canManage={canManage || selectedProject.leadId === user.id} section="responsibilities" /></TabsContent>
-                  <TabsContent value="terminology"><ProjectOperatingModel project={selectedProject} members={members?.map(({ user: member }) => member) ?? []} canManage={canManage || selectedProject.leadId === user.id} section="terminology" /></TabsContent>
+                  <TabsContent value="workflow"><ProjectOperatingModel project={selectedProject} members={members?.map(({ user: member }) => member) ?? []} canManage={canManageProject(selectedProject, user.id)} section="workflow" /></TabsContent>
+                  <TabsContent value="responsibilities"><ProjectOperatingModel project={selectedProject} members={members?.map(({ user: member }) => member) ?? []} canManage={canManageProject(selectedProject, user.id)} section="responsibilities" /></TabsContent>
+                  <TabsContent value="terminology"><ProjectOperatingModel project={selectedProject} members={members?.map(({ user: member }) => member) ?? []} canManage={canManageProject(selectedProject, user.id)} section="terminology" /></TabsContent>
                 </Tabs>
               </div>
             )}

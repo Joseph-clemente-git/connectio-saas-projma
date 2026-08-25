@@ -1,4 +1,4 @@
-import type { OrgMember } from '@/types/domain'
+import type { OrgMember, Project } from '@/types/domain'
 
 /** Only owners and admins can manage org-level membership, teams, and leads. */
 export function canManageOrg(member: OrgMember | undefined | null): boolean {
@@ -14,4 +14,9 @@ export function canViewBilling(member: OrgMember | undefined | null): boolean {
 export function canReviewTickets(member: OrgMember | undefined | null): boolean {
   if (!member) return false
   return member.role === 'owner' || member.role === 'admin' || member.canReview === true
+}
+
+/** Project-level settings belong exclusively to the member assigned as project lead. */
+export function canManageProject(project: Project | undefined | null, userId: string | undefined | null): boolean {
+  return Boolean(project?.leadId && userId && project.leadId === userId)
 }

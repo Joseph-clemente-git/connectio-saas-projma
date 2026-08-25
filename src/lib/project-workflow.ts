@@ -1,4 +1,4 @@
-import type { Project, ProjectWorkflowLabels, TaskStatus, WorkflowStage, WorkspaceTerminology } from '@/types/domain'
+import type { Project, ProjectWorkflowLabels, TaskStatus, Team, WorkflowStage, WorkspaceTerminology } from '@/types/domain'
 
 export const WORKFLOW_ORDER: TaskStatus[] = ['backlog', 'todo', 'in_progress', 'in_review', 'done']
 
@@ -82,6 +82,41 @@ export function workflowStages(project: Pick<Project, 'workflowStages' | 'workfl
 
 export function stageFor(project: Pick<Project, 'workflowStages' | 'workflowLabels'>, status: TaskStatus) {
   return workflowStages(project).find((stage) => stage.id === status)
+}
+
+/** Resolves the review stage that owns a task's next approval decision. */
+export function reviewStageForTask(project: Pick<Project, 'workflowStages' | 'workflowLabels'>, status: TaskStatus) {
+  const stages = workflowStages(project)
+  const currentIndex = stages.findIndex((stage) => stage.id === status)
+  const currentStage = stages[currentIndex]
+  if (currentStage?.requiresReview) return currentStage
+
+  const nextReviewStage = stages.slice(Math.max(currentIndex, 0)).find((stage) => stage.requiresReview)
+  return nextReviewStage ?? [...stages].reverse().find((stage) => stage.requiresReview)
+}
+
+/** Stage assignments are authoritative; the project reviewer is the fallback. */
+export function reviewerIdsForStage(
+  project: Pick<Project, 'reviewerId'>,
+  stage: Pick<WorkflowStage, 'reviewerIds' | 'reviewerTeamIds'> | undefined,
+  teams: Team[] = [],
+) {
+  if (!stage) return []
+  const configuredIds = [
+    ...(stage.reviewerIds ?? []),
+    ...(stage.reviewerTeamIds ?? []).flatMap((teamId) => teams.find((team) => team.id === teamId)?.memberIds ?? []),
+  ]
+  return [...new Set(configuredIds.length ? configuredIds : project.reviewerId ? [project.reviewerId] : [])]
+}
+
+/** The executor is never eligible to approve their own work. */
+export function eligibleReviewerIds(
+  project: Pick<Project, 'reviewerId'>,
+  stage: Pick<WorkflowStage, 'reviewerIds' | 'reviewerTeamIds'> | undefined,
+  teams: Team[] = [],
+  assigneeId?: string,
+) {
+  return reviewerIdsForStage(project, stage, teams).filter((reviewerId) => reviewerId !== assigneeId)
 }
 
 export function isFinalStage(project: Pick<Project, 'workflowStages' | 'workflowLabels'>, status: TaskStatus) {

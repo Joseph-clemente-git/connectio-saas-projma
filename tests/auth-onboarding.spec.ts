@@ -46,15 +46,46 @@ test('invitation acceptance forces a new member to create a private password', a
   expect(invitationUrl).toContain('/invite/')
   expect(temporaryPassword.length).toBeGreaterThanOrEqual(12)
 
-  await page.evaluate(() => localStorage.removeItem('connectio-session'))
+  // Simulate an invitation created before passwordless acceptance stored the
+  // invited user id. Opening the link must repair it instead of asking to log in.
+  await page.evaluate(async () => {
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open('connectio')
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error)
+    })
+    const transaction = database.transaction('invitations', 'readwrite')
+    const store = transaction.objectStore('invitations')
+    const invitations = await new Promise<Record<string, unknown>[]>((resolve, reject) => {
+      const request = store.getAll()
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error)
+    })
+    const invitation = invitations.find((entry) => entry.targetEmail === 'member@lifecycle.test')
+    if (invitation) {
+      delete invitation.provisionedUserId
+      store.put(invitation)
+    }
+    await new Promise<void>((resolve, reject) => {
+      transaction.oncomplete = () => resolve()
+      transaction.onerror = () => reject(transaction.error)
+      transaction.onabort = () => reject(transaction.error)
+    })
+    database.close()
+  })
+
   await page.goto(invitationUrl)
   await expect(page.getByRole('heading', { name: 'Join Lifecycle Studio' })).toBeVisible()
+  await expect(page.getByText('No sign-in is required.')).toBeVisible()
   await page.getByRole('button', { name: 'Accept invitation' }).click()
   await expect(page).toHaveURL(/\/change-password/)
   await page.getByLabel('New password', { exact: true }).fill('MemberSecure!2026')
   await page.getByLabel('Confirm new password').fill('MemberSecure!2026')
   await page.getByRole('button', { name: 'Set new password' }).click()
   await expect(page).toHaveURL(/\/app\/lifecycle-studio\/dashboard/)
+
+  await page.goto(invitationUrl)
+  await expect(page.getByRole('heading', { name: 'Invitation unavailable' })).toBeVisible()
 })
 
 test('seeded Super Admin bypasses tenant onboarding', async ({ page }) => {

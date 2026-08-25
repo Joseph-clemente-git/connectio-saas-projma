@@ -73,6 +73,7 @@ export function WorkspacesPage() {
             {workspaces.map((ws) => (
               <Card
                 key={ws.id}
+                data-tour-workspace={ws.id}
                 className="cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-md"
                 onClick={() => navigate(`../workspaces/${ws.id}`)}
               >

@@ -12,7 +12,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { InitialsAvatar } from '@/components/ui/avatar'
 import { useOrgMembersWithUsers } from '@/hooks/use-session-data'
-import { workflowStages } from '@/lib/project-workflow'
+import { eligibleReviewerIds, reviewStageForTask, workflowStages } from '@/lib/project-workflow'
 import { LinkifiedText } from '@/components/shared/linkified-text'
 import type { Project, Task, TaskPriority, TaskStatus } from '@/types/domain'
 
@@ -76,27 +76,69 @@ export function TaskDetailDialog({
 
   function patch(fields: Partial<Task>) {
     if (!taskId) return
-    const invalidatesApproval = activeTask.reviewState === 'approved' &&
-      ['title', 'description', 'assigneeId', 'reviewerId'].some((key) => key in fields)
-    db.tasks.update(taskId, invalidatesApproval
-      ? { ...fields, status: reworkStageId, reviewState: undefined, reviewedAt: undefined }
-      : fields)
+    const changedApprovalFields: string[] = []
+    if ('title' in fields && fields.title !== activeTask.title) changedApprovalFields.push('title')
+    if ('description' in fields && fields.description !== activeTask.description) changedApprovalFields.push('description')
+    if ('assigneeId' in fields && fields.assigneeId !== activeTask.assigneeId) changedApprovalFields.push('executor')
+    const invalidatesApproval = activeTask.reviewState === 'approved' && changedApprovalFields.length > 0
+
+    if (!invalidatesApproval) {
+      void db.tasks.update(taskId, fields)
+      return
+    }
+
+    const now = new Date().toISOString()
+    void db.transaction('rw', [db.tasks, db.auditLogs], async () => {
+      await db.tasks.update(taskId, { ...fields, status: reworkStageId, reviewState: undefined, reviewedAt: undefined })
+      await db.auditLogs.add({
+        id: crypto.randomUUID(),
+        orgId,
+        actorName: members?.find((member) => member.user.id === currentUserId)?.user.name ?? 'Unknown member',
+        action: `reopened approved task after changing ${changedApprovalFields.join(', ')}`,
+        target: activeTask.title,
+        createdAt: now,
+      })
+    })
   }
 
   function invalidateApprovedReview() {
     if (activeTask.reviewState === 'approved') {
-      void db.tasks.update(activeTask.id, { status: reworkStageId, reviewState: undefined, reviewedAt: undefined })
+      const now = new Date().toISOString()
+      void db.transaction('rw', [db.tasks, db.auditLogs], async () => {
+        await db.tasks.update(activeTask.id, { status: reworkStageId, reviewState: undefined, reviewedAt: undefined })
+        await db.auditLogs.add({
+          id: crypto.randomUUID(),
+          orgId,
+          actorName: members?.find((member) => member.user.id === currentUserId)?.user.name ?? 'Unknown member',
+          action: 'reopened approved task after changing subtasks',
+          target: activeTask.title,
+          createdAt: now,
+        })
+      })
     }
   }
 
   function changeStatus(status: TaskStatus) {
+    const source = stages.find((stage) => stage.id === activeTask.status)
     const destination = stages.find((stage) => stage.id === status)
+    if (source?.requiresReview) {
+      setFlowError('Only a reviewer assigned in the project flow can approve this task or request changes from the board.')
+      return
+    }
+    if (!(project.leadId === currentUserId || activeTask.assigneeId === currentUserId)) {
+      setFlowError('Only the assigned executor or project leader can move this task.')
+      return
+    }
     if (status !== stages[0]?.id && !activeTask.sprintId) {
       setFlowError('Add this task to a sprint before moving it into planned work.')
       return
     }
-    if (destination?.requiresReview && (!activeTask.assigneeId || !activeTask.reviewerId || activeTask.assigneeId === activeTask.reviewerId)) {
-      setFlowError('Choose an executor and a different reviewer before submitting this task for review.')
+    if (destination?.requiresReview && !activeTask.assigneeId) {
+      setFlowError('Choose an executor before submitting this task for review.')
+      return
+    }
+    if (destination?.requiresReview && eligibleReviewerIds(project, destination, teams ?? [], activeTask.assigneeId).length === 0) {
+      setFlowError('No reviewer is available. Update this review stage in the project flow.')
       return
     }
     if (status === stages.at(-1)?.id && activeTask.reviewState !== 'approved' && stages.some((stage) => stage.requiresReview)) {
@@ -111,12 +153,21 @@ export function TaskDetailDialog({
     setFlowError(null)
   }
 
-  async function review(decision: 'approved' | 'changes_requested') {
-    if (activeTask.reviewerId !== currentUserId) return
+  async function reviewTask(decision: 'approved' | 'changes_requested') {
+    const sourceIndex = stages.findIndex((stage) => stage.id === activeTask.status)
+    const source = stages[sourceIndex]
+    const assignedReviewerIds = eligibleReviewerIds(project, source, teams ?? [], activeTask.assigneeId)
+    if (!source?.requiresReview || !assignedReviewerIds.includes(currentUserId)) {
+      setFlowError('Only a reviewer assigned in the project flow can review this task.')
+      return
+    }
+    const destination = stages[decision === 'approved' ? Math.min(sourceIndex + 1, stages.length - 1) : Math.max(sourceIndex - 1, 0)]
+    const continuesIntoReview = decision === 'approved' && Boolean(destination?.requiresReview)
+    const now = new Date().toISOString()
     await db.tasks.update(activeTask.id, {
-      reviewState: decision,
-      reviewedAt: new Date().toISOString(),
-      status: decision === 'approved' ? workflowStages(project)[Math.min(workflowStages(project).findIndex((stage) => stage.id === activeTask.status) + 1, workflowStages(project).length - 1)]?.id ?? activeTask.status : workflowStages(project)[Math.max(workflowStages(project).findIndex((stage) => stage.id === activeTask.status) - 1, 0)]?.id ?? activeTask.status,
+      reviewState: continuesIntoReview ? 'pending' : decision,
+      reviewedAt: continuesIntoReview ? undefined : now,
+      status: destination?.id ?? activeTask.status,
     })
     await db.auditLogs.add({
       id: crypto.randomUUID(),
@@ -124,7 +175,7 @@ export function TaskDetailDialog({
       actorName: members?.find((member) => member.user.id === currentUserId)?.user.name ?? 'Unknown reviewer',
       action: decision === 'approved' ? 'approved task' : 'requested changes on task',
       target: activeTask.title,
-      createdAt: new Date().toISOString(),
+      createdAt: now,
     })
     setFlowError(null)
   }
@@ -168,21 +219,25 @@ export function TaskDetailDialog({
   }
 
   const doneCount = subtasks?.filter((s) => s.done).length ?? 0
-  const currentStage = workflowStages(project).find((stage) => stage.id === task.status)
   const statusOptions = workflowStages(project).map((stage) => ({ value: stage.id, label: stage.name }))
   const creator = members?.find((member) => member.user.id === task.createdById)?.user
   const assignee = members?.find((member) => member.user.id === task.assigneeId)?.user
-  const reviewer = members?.find((member) => member.user.id === task.reviewerId)?.user
-  const canReview = currentStage?.requiresReview && (currentStage.reviewerIds?.includes(currentUserId) || currentStage.reviewerTeamIds?.some((teamId) => teams?.find((team) => team.id === teamId)?.memberIds.includes(currentUserId)) || task.reviewerId === currentUserId)
+  const reviewStage = reviewStageForTask(project, task.status)
+  const reviewerIds = eligibleReviewerIds(project, reviewStage, teams ?? [], task.assigneeId)
+  const reviewers = reviewerIds.map((reviewerId) => members?.find((member) => member.user.id === reviewerId)?.user).filter(Boolean)
+  const reviewerNames = reviewers.map((reviewer) => reviewer?.name).join(', ')
   const canCoordinateTask = canManage || project.coordinatorId === currentUserId
   const canExecuteTask = canCoordinateTask || task.assigneeId === currentUserId
+  const currentStage = stages.find((stage) => stage.id === task.status)
+  const canReviewTask = Boolean(currentStage?.requiresReview && reviewerIds.includes(currentUserId))
+  const canChangeStatus = !currentStage?.requiresReview && (project.leadId === currentUserId || task.assigneeId === currentUserId)
   const selectedSprint = sprints?.find((sprint) => sprint.id === task.sprintId)
   const inheritedMilestoneId = selectedSprint?.milestoneId
   const effectiveMilestoneId = inheritedMilestoneId ?? task.milestoneId
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
+      <DialogContent data-tour="task-detail" className="max-h-[90vh] max-w-2xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="sr-only">Edit task</DialogTitle>
           <Input
@@ -207,7 +262,7 @@ export function TaskDetailDialog({
             </div>
             <div className="rounded-lg border border-border p-3">
               <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground"><Eye className="size-3.5" /> Checking the work</p>
-              <p className="mt-1 truncate text-sm font-semibold text-foreground">{reviewer?.name ?? 'Not assigned'}</p>
+              <p className="mt-1 truncate text-sm font-semibold text-foreground" title={reviewerNames || undefined}>{reviewerNames || 'Not configured in project flow'}</p>
             </div>
           </div>
           {flowError && <div role="alert" className="flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm text-warning"><AlertCircle className="size-4 shrink-0" />{flowError}</div>}
@@ -224,7 +279,7 @@ export function TaskDetailDialog({
           <div className="grid grid-cols-2 gap-4">
             <div className="flex flex-col gap-1.5">
               <Label>Status</Label>
-              <Select value={task.status} onValueChange={(v) => changeStatus(v as TaskStatus)} disabled={!canExecuteTask}>
+              <Select value={task.status} onValueChange={(v) => changeStatus(v as TaskStatus)} disabled={!canChangeStatus}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
@@ -236,6 +291,13 @@ export function TaskDetailDialog({
                   ))}
                 </SelectContent>
               </Select>
+              {!canChangeStatus && (
+                <p className="text-xs text-muted-foreground">
+                  {currentStage?.requiresReview
+                    ? canReviewTask ? 'Use the review actions below.' : 'Only an assigned reviewer can approve or request changes.'
+                    : 'Only the assigned executor or project leader can change status.'}
+                </p>
+              )}
             </div>
             <div className="flex flex-col gap-1.5">
               <Label>Priority</Label>
@@ -259,7 +321,7 @@ export function TaskDetailDialog({
                 value={task.assigneeId ?? 'unassigned'}
                 onValueChange={(v) => {
                   const assigneeId = v === 'unassigned' ? undefined : v
-                  patch({ assigneeId, reviewerId: assigneeId === task.reviewerId ? undefined : task.reviewerId, reviewState: undefined })
+                  patch({ assigneeId, reviewState: undefined, reviewedAt: undefined })
                   setFlowError(null)
                 }}
               >
@@ -275,23 +337,6 @@ export function TaskDetailDialog({
                   ))}
                 </SelectContent>
               </Select>
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <Label>Independent reviewer</Label>
-              <Select
-                disabled={!canCoordinateTask}
-                value={task.reviewerId ?? 'unassigned'}
-                onValueChange={(v) => { patch({ reviewerId: v === 'unassigned' ? undefined : v, reviewState: undefined }); setFlowError(null) }}
-              >
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="unassigned">Unassigned</SelectItem>
-                  {members?.filter(({ user }) => user.id !== task.assigneeId).map(({ user }) => (
-                    <SelectItem key={user.id} value={user.id}>{user.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">The executor is excluded to prevent self-approval.</p>
             </div>
             <div className="flex flex-col gap-1.5">
               <Label>Due date</Label>
@@ -337,12 +382,16 @@ export function TaskDetailDialog({
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <p className="font-semibold text-foreground">{currentStage.name}: review required</p>
-                  <p className="text-xs text-muted-foreground">{canReview ? 'You are the assigned reviewer. Record an explicit decision.' : reviewer ? `Waiting for ${reviewer.name} to review this work.` : 'Assign a reviewer before work can be completed.'}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {canReviewTask
+                      ? 'You are an assigned reviewer. Approve this work or request changes.'
+                      : reviewerNames ? `Waiting for ${reviewerNames} to review this work.` : 'No eligible reviewer is configured.'}
+                  </p>
                 </div>
-                {canReview && (
-                  <div className="flex gap-2">
-                    <Button variant="outline" size="sm" onClick={() => review('changes_requested')}><RotateCcw className="size-3.5" /> Request changes</Button>
-                    <Button size="sm" onClick={() => review('approved')}><Check className="size-3.5" /> Approve</Button>
+                {canReviewTask && (
+                  <div className="flex flex-wrap gap-2">
+                    <Button type="button" variant="outline" className="min-h-11" onClick={() => reviewTask('changes_requested')}><RotateCcw aria-hidden="true" className="size-4" /> Request changes</Button>
+                    <Button type="button" className="min-h-11" onClick={() => reviewTask('approved')}><Check aria-hidden="true" className="size-4" /> Approve</Button>
                   </div>
                 )}
               </div>

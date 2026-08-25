@@ -13,8 +13,8 @@ import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { StatCard } from '@/components/shared/stat-card'
 import { calculateScheduleHealth, calculateTaskProgress } from '@/lib/schedule-health'
-import { workflowStages } from '@/lib/project-workflow'
-import type { Project, Task } from '@/types/domain'
+import { eligibleReviewerIds, workflowStages } from '@/lib/project-workflow'
+import type { Project, Task, Team } from '@/types/domain'
 
 type ProjectHealth = 'on_track' | 'at_risk' | 'delayed' | 'complete' | 'not_started' | 'archived'
 
@@ -45,7 +45,7 @@ function getProjectCompletion(project: Project, tasks: Task[]) {
   return calculateTaskProgress(tasks, workflowStages(project).at(-1)?.id)
 }
 
-function getProjectHealth(project: Project, tasks: Task[], completion: number, now: Date): ProjectHealth {
+function getProjectHealth(project: Project, tasks: Task[], teams: Team[], completion: number, now: Date): ProjectHealth {
   if (project.status === 'archived') return 'archived'
   if (project.status === 'completed' || completion === 100) return 'complete'
   if (tasks.length === 0) return 'not_started'
@@ -59,14 +59,14 @@ function getProjectHealth(project: Project, tasks: Task[], completion: number, n
   const reviewStages = new Set(stages.filter((stage) => stage.requiresReview).map((stage) => stage.id))
   const hasDeliveryRisk = tasks.some((task) =>
     (task.status !== finalStage && Boolean(task.dueDate && new Date(task.dueDate).getTime() < now.getTime())) ||
-    (reviewStages.has(task.status) && (!task.reviewerId || task.reviewerId === task.assigneeId)) ||
+    (reviewStages.has(task.status) && eligibleReviewerIds(project, stages.find((stage) => stage.id === task.status), teams, task.assigneeId).length === 0) ||
     (task.status === finalStage && reviewStages.size > 0 && task.reviewState !== 'approved'),
   )
 
   return hasDeliveryRisk ? 'at_risk' : 'on_track'
 }
 
-export function WorkspaceProjectOverview({ projects, tasks }: { projects: Project[]; tasks: Task[] }) {
+export function WorkspaceProjectOverview({ projects, tasks, teams }: { projects: Project[]; tasks: Task[]; teams: Team[] }) {
   const now = new Date()
   const tasksByProject = new Map<string, Task[]>()
   for (const task of tasks) {
@@ -78,7 +78,7 @@ export function WorkspaceProjectOverview({ projects, tasks }: { projects: Projec
   const summaries: ProjectSummary[] = projects.map((project) => {
     const projectTasks = tasksByProject.get(project.id) ?? []
     const completion = getProjectCompletion(project, projectTasks)
-    return { project, completion, health: getProjectHealth(project, projectTasks, completion, now) }
+    return { project, completion, health: getProjectHealth(project, projectTasks, teams, completion, now) }
   })
   const currentProjects = summaries.filter(({ project }) => project.status !== 'archived')
   const overallCompletion = currentProjects.length

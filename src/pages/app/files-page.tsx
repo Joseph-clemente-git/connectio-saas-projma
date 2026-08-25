@@ -5,5 +5,5 @@ import { FileExplorer } from '@/components/files/file-explorer'
 
 export function FilesPage() {
   const { org, user, plan } = useOutletContext<TenantOutletContext>()
-  return <div className="flex min-h-0 flex-1 flex-col"><PageHeader title="Files" description="Browse, search, and manage files across your organization." /><FileExplorer orgId={org.id} userId={user.id} plan={plan} title="Organization files" /></div>
+  return <div className="flex min-h-0 flex-1 flex-col"><PageHeader title="Files" description="Browse, search, and manage organization-wide files." /><FileExplorer orgId={org.id} userId={user.id} plan={plan} title="Organization files" /></div>
 }

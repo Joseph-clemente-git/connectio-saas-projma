@@ -267,6 +267,9 @@ export async function provisionInvitedMember(input: {
     verifiedAt: now,
     createdAt: now,
   }
+  // The single-use invitation token is the invited person's first authentication
+  // factor. Accepting it starts a restricted session that can only set a password.
+  const provisionedUserId = user.id
   const temporaryPassword = existingUser ? undefined : createTemporaryPassword()
 
   if (!existingUser) {
@@ -281,10 +284,10 @@ export async function provisionInvitedMember(input: {
       orgId: input.orgId, inviterId: input.inviterId, email, role: input.role,
       workspaceIds: input.workspaceIds, canReview: input.canReview,
     })
-    await db.invitations.update(result.invitation.id, { provisionedUserId: existingUser ? undefined : user.id })
+    await db.invitations.update(result.invitation.id, { provisionedUserId })
     return {
       user, temporaryPassword, isNewAccount: !existingUser, token: result.token,
-      invitation: { ...result.invitation, provisionedUserId: existingUser ? undefined : user.id },
+      invitation: { ...result.invitation, provisionedUserId },
     }
   } catch (cause) {
     if (!existingUser) {
@@ -395,6 +398,15 @@ export async function getInvitationByToken(token: string): Promise<OrganizationI
     await db.invitations.update(invitation.id, { status: 'expired' })
     return { ...invitation, status: 'expired' }
   }
+  // Invitations created before passwordless acceptance did not store the invited
+  // user id. Repair them on read so their link remains usable without a login.
+  if (invitation.status === 'pending' && !invitation.provisionedUserId) {
+    const invitedUser = await db.users.where('email').equals(invitation.targetEmail).first()
+    if (invitedUser) {
+      await db.invitations.update(invitation.id, { provisionedUserId: invitedUser.id })
+      return { ...invitation, provisionedUserId: invitedUser.id }
+    }
+  }
   return invitation
 }
 
@@ -438,11 +450,12 @@ export async function acceptProvisionedInvitation(token: string): Promise<Authen
   }
   const user = await db.users.get(invitation.provisionedUserId)
   const credential = user ? await db.authCredentials.get(user.id) : undefined
-  if (!user || !credential || !credential.mustChangePassword || user.email !== invitation.targetEmail) {
+  if (!user || !credential || user.email !== invitation.targetEmail) {
     throw new Error('This invitation is invalid or has expired.')
   }
 
   const orgId = await acceptInvitation(token, user.id)
+  await db.authCredentials.update(user.id, { mustChangePassword: true })
   const sessionToken = randomToken()
   const now = new Date()
   await db.authSessions.add({

@@ -14,7 +14,7 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 
-type ExplorerScope = { orgId: ID; userId: ID; plan: PlanConfig; workspaceId?: ID; projectId?: ID; title?: string }
+type ExplorerScope = { orgId: ID; userId: ID; plan: PlanConfig; workspaceId?: ID; projectId?: ID; title?: string; canManage?: boolean }
 const ROOT_FOLDERS = ['Documents', 'Images', 'Project Files', 'Templates']
 const GB = 1024 * 1024 * 1024
 
@@ -32,7 +32,7 @@ function iconFor(entry: FileEntry) {
   return <File className="size-5 text-muted-foreground" aria-hidden="true" />
 }
 
-export function FileExplorer({ orgId, userId, plan, workspaceId, projectId, title }: ExplorerScope) {
+export function FileExplorer({ orgId, userId, plan, workspaceId, projectId, title, canManage = true }: ExplorerScope) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [currentId, setCurrentId] = useState<string | undefined>()
   const [query, setQuery] = useState('')
@@ -45,6 +45,7 @@ export function FileExplorer({ orgId, userId, plan, workspaceId, projectId, titl
     let all = await db.files.where('orgId').equals(orgId).toArray()
     if (projectId) all = all.filter((entry) => entry.projectId === projectId)
     else if (workspaceId) all = all.filter((entry) => entry.workspaceId === workspaceId && !entry.projectId)
+    else all = all.filter((entry) => !entry.workspaceId && !entry.projectId)
     return all
   }, [orgId, workspaceId, projectId])
 
@@ -77,24 +78,25 @@ export function FileExplorer({ orgId, userId, plan, workspaceId, projectId, titl
   const percentage = Math.min(100, Math.round((used / limit) * 100))
 
   function openDialog(kind: 'folder' | 'rename' | 'move' | 'permissions' | 'delete' | 'preview', entry?: FileEntry) {
+    if (!canManage && kind !== 'preview') return
     setActive(entry ?? null); setName(entry?.name ?? ''); setDestination(entry?.parentId ?? 'root'); setDialog(kind)
   }
   async function createFolder() {
-    if (!name.trim()) return
+    if (!canManage || !name.trim()) return
     const now = new Date().toISOString()
     await db.files.add({ id: crypto.randomUUID(), orgId, workspaceId, projectId, parentId: currentId, kind: 'folder', name: name.trim(), size: 0, permission: projectId ? 'project' : 'workspace', version: 1, createdAt: now, updatedAt: now, updatedById: userId })
     setDialog(null)
   }
-  async function rename() { if (active && name.trim()) { await db.files.update(active.id, { name: name.trim(), version: active.version + 1, updatedAt: new Date().toISOString(), updatedById: userId }); setDialog(null) } }
-  async function move() { if (active) { await db.files.update(active.id, { parentId: destination === 'root' ? undefined : destination, updatedAt: new Date().toISOString(), updatedById: userId }); setDialog(null) } }
+  async function rename() { if (canManage && active && name.trim()) { await db.files.update(active.id, { name: name.trim(), version: active.version + 1, updatedAt: new Date().toISOString(), updatedById: userId }); setDialog(null) } }
+  async function move() { if (canManage && active) { await db.files.update(active.id, { parentId: destination === 'root' ? undefined : destination, updatedAt: new Date().toISOString(), updatedById: userId }); setDialog(null) } }
   async function remove() {
-    if (!active) return
+    if (!canManage || !active) return
     const ids = new Set<string>([active.id]); let changed = true
     while (changed) { changed = false; items.forEach((entry) => { if (entry.parentId && ids.has(entry.parentId) && !ids.has(entry.id)) { ids.add(entry.id); changed = true } }) }
     await db.files.bulkDelete([...ids]); if (currentId && ids.has(currentId)) setCurrentId(undefined); setDialog(null)
   }
   async function upload(files: FileList | null) {
-    if (!files?.length) return
+    if (!canManage || !files?.length) return
     const selected = [...files]
     const total = selected.reduce((sum, file) => sum + file.size, 0)
     if (used + total > limit) { window.alert(`This upload exceeds your ${plan.limits.storageGb} GB ${plan.name} storage capacity.`); return }
@@ -113,7 +115,7 @@ export function FileExplorer({ orgId, userId, plan, workspaceId, projectId, titl
   return <div className="flex min-h-0 flex-1 flex-col bg-background">
     <div className="flex flex-col gap-4 border-b border-border bg-card px-6 py-4 lg:flex-row lg:items-center lg:justify-between">
       <div className="min-w-0"><h2 className="text-lg font-bold text-foreground">{title ?? 'File Explorer'}</h2><div className="mt-1 flex items-center gap-1 overflow-x-auto text-xs text-muted-foreground"><button className="cursor-pointer hover:text-primary" onClick={() => setCurrentId(undefined)}>Home</button>{ancestors.map((entry) => <span className="flex items-center gap-1" key={entry.id}><ChevronRight className="size-3" /><button className="cursor-pointer whitespace-nowrap hover:text-primary" onClick={() => setCurrentId(entry.id)}>{entry.name}</button></span>)}</div></div>
-      <div className="flex flex-wrap items-center gap-2"><Button variant="outline" size="sm" onClick={() => openDialog('folder')}><FolderPlus /> New folder</Button><Button size="sm" onClick={() => inputRef.current?.click()}><Upload /> Upload</Button><input ref={inputRef} className="sr-only" type="file" multiple onChange={(event) => upload(event.target.files)} /></div>
+      {canManage && <div className="flex flex-wrap items-center gap-2"><Button variant="outline" size="sm" onClick={() => openDialog('folder')}><FolderPlus /> New folder</Button><Button size="sm" onClick={() => inputRef.current?.click()}><Upload /> Upload</Button><input ref={inputRef} className="sr-only" type="file" multiple onChange={(event) => upload(event.target.files)} /></div>}
     </div>
     <div className="grid gap-3 border-b border-border bg-muted/20 px-4 py-3 sm:px-6 lg:grid-cols-[minmax(0,1fr)_minmax(19rem,22rem)] lg:items-stretch">
       <div className="flex h-11 min-w-0 items-center gap-3 rounded-lg border border-border bg-card px-4 text-muted-foreground shadow-xs transition-colors focus-within:border-primary focus-within:ring-3 focus-within:ring-primary/20">
@@ -145,7 +147,7 @@ export function FileExplorer({ orgId, userId, plan, workspaceId, projectId, titl
         {visible.map((entry) => <div key={entry.id} className="grid grid-cols-[minmax(0,1fr)_40px] items-center gap-3 border-b border-border px-4 py-3 last:border-b-0 transition-colors hover:bg-muted/40 md:grid-cols-[minmax(240px,1fr)_110px_150px_130px_44px]">
           <button className="flex min-w-0 cursor-pointer items-center gap-3 text-left" onClick={() => entry.kind === 'folder' ? (setCurrentId(entry.id), setQuery('')) : openDialog('preview', entry)}>{iconFor(entry)}<span className="min-w-0"><span className="block truncate text-sm font-semibold text-foreground">{entry.name}</span><span className="block text-xs text-muted-foreground md:hidden">{entry.kind === 'folder' ? 'Folder' : bytes(entry.size)} · v{entry.version}</span></span></button>
           <span className="hidden text-sm text-muted-foreground md:block">{entry.kind === 'folder' ? '—' : bytes(entry.size)}</span><span className="hidden text-xs text-muted-foreground md:block">{format(new Date(entry.updatedAt), 'MMM d, yyyy')}</span><span className="hidden md:block"><Badge variant="secondary" className="capitalize"><Shield className="size-3" /> {entry.permission}</Badge></span>
-          <DropdownMenu><DropdownMenuTrigger asChild><Button size="icon" variant="ghost" aria-label={`Actions for ${entry.name}`}><MoreHorizontal /></Button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem onSelect={() => entry.kind === 'file' && openDialog('preview', entry)}><Eye /> Preview</DropdownMenuItem>{entry.kind === 'file' && <DropdownMenuItem onSelect={() => download(entry)}><Download /> Download</DropdownMenuItem>}<DropdownMenuItem onSelect={() => openDialog('rename', entry)}><Pencil /> Rename</DropdownMenuItem><DropdownMenuItem onSelect={() => openDialog('move', entry)}><MoveRight /> Move</DropdownMenuItem><DropdownMenuItem onSelect={() => openDialog('permissions', entry)}><Shield /> Permissions</DropdownMenuItem><DropdownMenuSeparator /><DropdownMenuItem className="text-destructive focus:text-destructive" onSelect={() => openDialog('delete', entry)}><Trash2 /> Delete</DropdownMenuItem></DropdownMenuContent></DropdownMenu>
+          <DropdownMenu><DropdownMenuTrigger asChild><Button size="icon" variant="ghost" aria-label={`Actions for ${entry.name}`}><MoreHorizontal /></Button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem onSelect={() => entry.kind === 'file' && openDialog('preview', entry)}><Eye /> Preview</DropdownMenuItem>{entry.kind === 'file' && <DropdownMenuItem onSelect={() => download(entry)}><Download /> Download</DropdownMenuItem>}{canManage && <><DropdownMenuItem onSelect={() => openDialog('rename', entry)}><Pencil /> Rename</DropdownMenuItem><DropdownMenuItem onSelect={() => openDialog('move', entry)}><MoveRight /> Move</DropdownMenuItem><DropdownMenuItem onSelect={() => openDialog('permissions', entry)}><Shield /> Permissions</DropdownMenuItem><DropdownMenuSeparator /><DropdownMenuItem className="text-destructive focus:text-destructive" onSelect={() => openDialog('delete', entry)}><Trash2 /> Delete</DropdownMenuItem></>}</DropdownMenuContent></DropdownMenu>
         </div>)}
         {!visible.length && <div className="px-6 py-14 text-center"><Folder className="mx-auto size-9 text-muted-foreground/50" /><p className="mt-3 font-semibold">{isSearch ? 'No matching files' : 'This folder is empty'}</p><p className="mt-1 text-sm text-muted-foreground">{isSearch ? 'Try a different name or clear the search.' : 'Create a folder or upload files to get started.'}</p></div>}
       </div>

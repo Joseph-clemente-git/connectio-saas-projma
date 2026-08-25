@@ -163,7 +163,7 @@ export function OnboardingPage() {
           action: 'completed onboarding', target: org.name, createdAt: now,
         })
       })
-      navigate(`/app/${org.slug}/dashboard`, { replace: true })
+      navigate(`/app/${org.slug}/dashboard?tour=1`, { replace: true })
     })
   }
 

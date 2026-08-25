@@ -418,8 +418,6 @@ export interface Task {
   /** The member who added/defined the work. */
   createdById?: ID
   assigneeId?: ID
-  /** Must be different from assigneeId to preserve independent review. */
-  reviewerId?: ID
   reviewState?: TaskReviewState
   reviewedAt?: string
   /** Optional planning dates and metadata, including values imported from task spreadsheets. */

@@ -13,6 +13,7 @@ import type { Organization, User } from '@/types/domain'
 import type { PlanConfig } from '@/lib/plans'
 import { processDueRecurringReports } from '@/lib/recurring-reports'
 import { db } from '@/db/schema'
+import { ProductTour } from '@/components/shared/product-tour'
 
 export interface TenantOutletContext {
   org: Organization
@@ -99,6 +100,7 @@ export function TenantAppLayout() {
         </main>
       </div>
       <UpgradeDialog />
+      <ProductTour org={org} user={user} membershipRole={membership.role} />
     </div>
   )
 }

@@ -1,9 +1,8 @@
 import { useNavigate } from 'react-router-dom'
-import { Bell, ChevronDown, LogOut, Menu } from 'lucide-react'
-import { useLiveQuery } from 'dexie-react-hooks'
-import { db } from '@/db/schema'
+import { ChevronDown, CircleHelp, LogOut, Menu } from 'lucide-react'
 import { InitialsAvatar } from '@/components/ui/avatar'
 import { PlanBadge } from '@/components/shared/plan-badge'
+import { NotificationCenter } from '@/components/shared/notification-center'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -27,16 +26,6 @@ export function Topbar({
 }) {
   const navigate = useNavigate()
   const signOut = useSession((s) => s.signOut)
-  const unread = useLiveQuery(async () => {
-    const conversations = await db.chatConversations.where('orgId').equals(org.id).toArray()
-    const reads = await db.chatReadStates.where('userId').equals(user.id).toArray()
-    const readByConversation = new Map(reads.map((read) => [read.conversationId, read.readAt]))
-    const counts = await Promise.all(conversations.map(async (conversation) => {
-      const latest = await db.chatMessages.where('conversationId').equals(conversation.id).last()
-      return latest && latest.authorId !== user.id && (!readByConversation.get(conversation.id) || latest.createdAt > readByConversation.get(conversation.id)!) ? 1 : 0
-    }))
-    return counts.reduce<number>((total, count) => total + count, 0)
-  }, [org.id, user.id]) ?? 0
 
   return (
     <header className="flex h-16 shrink-0 items-center justify-between gap-4 border-b border-border bg-card/80 px-4 backdrop-blur-md sm:px-6">
@@ -51,10 +40,17 @@ export function Topbar({
       </div>
 
       <div className="flex items-center gap-2">
-        <button type="button" aria-label={`${unread} unread chat notification${unread === 1 ? '' : 's'}`} className="relative flex size-10 cursor-pointer items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground" onClick={() => navigate(`/app/${org.slug}/chat`)}>
-          <Bell className="size-4" />
-          {unread > 0 && <span className="absolute right-1 top-1 flex min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-bold text-white">{unread > 9 ? '9+' : unread}</span>}
-        </button>
+        <Button
+          type="button"
+          variant="ghost"
+          className="min-h-10 px-2 sm:px-3"
+          onClick={() => window.dispatchEvent(new Event('connectio:start-product-tour'))}
+          aria-label="Start guided tutorial"
+        >
+          <CircleHelp aria-hidden="true" className="size-4" />
+          <span className="hidden sm:inline">Help</span>
+        </Button>
+        <NotificationCenter org={org} user={user} />
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <button

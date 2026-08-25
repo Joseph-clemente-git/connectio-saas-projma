@@ -16,7 +16,7 @@ export function InvitationPage() {
   const navigate = useNavigate()
   const session = useSession()
   const [context, setContext] = useState<InvitationContext | null | undefined>(undefined)
-  const [authenticated, setAuthenticated] = useState(false)
+  const [authenticatedUser, setAuthenticatedUser] = useState<User | null>(null)
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
@@ -24,7 +24,7 @@ export function InvitationPage() {
     let cancelled = false
     void Promise.all([getInvitationByToken(token), validateSession(session.sessionToken, session.userId)]).then(async ([invitation, user]) => {
       if (cancelled) return
-      setAuthenticated(Boolean(user))
+      setAuthenticatedUser(user)
       if (!invitation) { setContext(null); return }
       const [org, inviter] = await Promise.all([db.organizations.get(invitation.orgId), db.users.get(invitation.inviterId)])
       if (!cancelled) setContext({ invitation, org, inviter })
@@ -55,6 +55,8 @@ export function InvitationPage() {
   const invalid = !context || context.invitation.status !== 'pending'
   const authQuery = encodeURIComponent(token)
   const provisioned = context?.invitation.provisionedUserId !== undefined
+  const signedInWithInvitedEmail = authenticatedUser?.email === context?.invitation.targetEmail
+  const signedInWithDifferentEmail = Boolean(authenticatedUser && !signedInWithInvitedEmail)
 
   return (
     <main className="flex min-h-svh items-center justify-center bg-background px-4 py-10">
@@ -73,7 +75,7 @@ export function InvitationPage() {
               <div className="flex items-center justify-between gap-4 py-3"><dt className="flex items-center gap-2 text-muted-foreground"><Mail className="size-4" />Invited email</dt><dd className="truncate font-medium">{context.invitation.targetEmail}</dd></div>
             </dl>
             {error && <div role="alert" className="rounded-lg border border-destructive/20 bg-destructive/5 p-3 text-sm text-destructive">{error}</div>}
-            {provisioned || authenticated ? <><Button size="lg" className="w-full" onClick={() => void accept()} disabled={submitting}>{submitting ? <LoaderCircle className="animate-spin" /> : <CheckCircle2 />}{submitting ? 'Accepting…' : 'Accept invitation'}</Button>{provisioned && <p className="text-center text-xs leading-5 text-muted-foreground">After accepting, you’ll create a private password before entering the organization.</p>}</> : <div className="grid gap-3 sm:grid-cols-2"><Button asChild size="lg"><Link to={`/login?invite=${authQuery}`}>Sign in</Link></Button><Button asChild size="lg" variant="outline"><Link to={`/register?invite=${authQuery}`}>Create account</Link></Button></div>}
+            {provisioned ? <><Button size="lg" className="w-full" onClick={() => void accept()} disabled={submitting}>{submitting ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <CheckCircle2 aria-hidden="true" />}{submitting ? 'Accepting invitation…' : 'Accept invitation'}</Button><p className="text-center text-xs leading-5 text-muted-foreground">No sign-in is required. After accepting, you’ll create your private password before entering the organization.</p></> : signedInWithInvitedEmail ? <Button size="lg" className="w-full" onClick={() => void accept()} disabled={submitting}>{submitting ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <CheckCircle2 aria-hidden="true" />}{submitting ? 'Accepting invitation…' : 'Accept invitation'}</Button> : <><div className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm text-foreground" role={signedInWithDifferentEmail ? 'alert' : 'status'}>{signedInWithDifferentEmail ? <>You’re signed in as <strong>{authenticatedUser?.email}</strong>. Switch to <strong>{context.invitation.targetEmail}</strong> to accept this invitation.</> : <>This invitation belongs to an existing Connectio account. Sign in as <strong>{context.invitation.targetEmail}</strong> to continue.</>}</div><div className="grid gap-3 sm:grid-cols-2"><Button asChild size="lg"><Link to={`/login?invite=${authQuery}`}>{signedInWithDifferentEmail ? 'Switch account' : 'Sign in'}</Link></Button>{!signedInWithDifferentEmail && <Button asChild size="lg" variant="outline"><Link to={`/register?invite=${authQuery}`}>Create account</Link></Button>}</div></>}
           </CardContent>}
         </Card>
       </div>

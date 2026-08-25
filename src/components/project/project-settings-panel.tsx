@@ -45,6 +45,7 @@ export function ProjectSettingsPanel({ project, members, canManage }: { project:
   const updateMember = (field: 'leadId' | 'coordinatorId' | 'reviewerId', value: string) => updateDraft(field, value === 'unassigned' ? undefined : value)
 
   async function saveProject() {
+    if (!canManage) return
     const name = draft.name.trim()
     if (!name) return
     setSaving(true)
@@ -64,6 +65,11 @@ export function ProjectSettingsPanel({ project, members, canManage }: { project:
 
   return (
     <>
+      {!canManage && (
+        <div role="status" className="rounded-lg border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
+          Project settings are read-only. Only the assigned project leader can change them; project members can continue editing board tasks.
+        </div>
+      )}
       <Tabs defaultValue="general" className="space-y-5">
         <TabsList aria-label="Project settings sections" className="h-auto w-full justify-start gap-1 overflow-x-auto sm:w-auto">
           <TabsTrigger value="general">General</TabsTrigger>
@@ -95,7 +101,7 @@ export function ProjectSettingsPanel({ project, members, canManage }: { project:
         <TabsContent value="terminology" className="mt-0"><ProjectOperatingModel project={project} members={members} canManage={canManage} section="terminology" /></TabsContent>
       </Tabs>
 
-      <Dialog open={editing} onOpenChange={(open) => { if (open) setDraft(draftFor(project)); setEditing(open) }}>
+      <Dialog open={canManage && editing} onOpenChange={(open) => { if (!canManage) return; if (open) setDraft(draftFor(project)); setEditing(open) }}>
         <DialogContent className="max-h-[calc(100dvh-2rem)] max-w-2xl overflow-y-auto p-6 sm:p-8">
           <DialogHeader><DialogTitle>Edit project</DialogTitle><DialogDescription>Update all project details in one place. Changes are saved only when you choose Save changes.</DialogDescription></DialogHeader>
           <div className="grid gap-4 sm:grid-cols-2">

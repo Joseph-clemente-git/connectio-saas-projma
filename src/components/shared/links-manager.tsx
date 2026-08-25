@@ -16,9 +16,10 @@ interface LinksManagerProps {
   currentUser: User
   workspaceId?: string
   projectId?: string
+  canManage?: boolean
 }
 
-export function LinksManager({ orgId, currentUser, workspaceId, projectId }: LinksManagerProps) {
+export function LinksManager({ orgId, currentUser, workspaceId, projectId, canManage = true }: LinksManagerProps) {
   const [open, setOpen] = useState(false)
   const [title, setTitle] = useState('')
   const [url, setUrl] = useState('')
@@ -48,6 +49,7 @@ export function LinksManager({ orgId, currentUser, workspaceId, projectId }: Lin
   }
 
   async function createLink() {
+    if (!canManage) return
     let normalizedUrl: string
     try {
       normalizedUrl = new URL(url.trim()).toString()
@@ -77,7 +79,7 @@ export function LinksManager({ orgId, currentUser, workspaceId, projectId }: Lin
           <h2 id={`${scope}-links-heading`} className="flex items-center gap-2 text-lg font-semibold text-foreground"><Link2 className="size-5 text-primary" /> Links</h2>
           <p className="mt-1 text-sm text-muted-foreground">Shared resources with context, so members know what each link is for before opening it.</p>
         </div>
-        <Button onClick={() => setOpen(true)}><Plus /> Add link</Button>
+        {canManage && <Button onClick={() => setOpen(true)}><Plus /> Add link</Button>}
       </div>
 
       {links && links.length > 0 ? (
@@ -105,8 +107,8 @@ export function LinksManager({ orgId, currentUser, workspaceId, projectId }: Lin
           <CardContent className="flex flex-col items-center py-10 text-center">
             <Link2 className="size-8 text-muted-foreground" />
             <h3 className="mt-3 font-semibold text-foreground">No links yet</h3>
-            <p className="mt-1 max-w-md text-sm text-muted-foreground">Add design files, documents, or other resources and explain their purpose for the team.</p>
-            <Button className="mt-4" onClick={() => setOpen(true)}><Plus /> Add the first link</Button>
+            <p className="mt-1 max-w-md text-sm text-muted-foreground">{canManage ? 'Add design files, documents, or other resources and explain their purpose for the team.' : 'Links added by the project leader will appear here.'}</p>
+            {canManage && <Button className="mt-4" onClick={() => setOpen(true)}><Plus /> Add the first link</Button>}
           </CardContent>
         </Card>
       )}
