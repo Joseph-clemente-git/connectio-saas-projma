@@ -1,4 +1,4 @@
-import type { MilestoneStatus, Task } from '@/types/domain'
+import type { MilestoneStatus, Sprint, Task } from '@/types/domain'
 
 export type ScheduleHealth = 'on_track' | 'at_risk' | 'delayed'
 
@@ -41,24 +41,69 @@ export function calculateScheduleHealth(
   }
 }
 
-/** Uses explicit task completion when available, otherwise treats done work as 100%. */
-export function calculateTaskProgress(tasks: Task[]) {
+/** Uses explicit task completion when available, otherwise treats the project's final stage as 100%. */
+export function calculateTaskProgress(tasks: Task[], finalStatus = 'done') {
   if (tasks.length === 0) return 0
   const total = tasks.reduce((sum, task) => {
-    const completion = task.completion ?? (task.status === 'done' ? 100 : 0)
+    const completion = task.completion ?? (task.status === finalStatus ? 100 : 0)
     return sum + Math.min(Math.max(completion, 0), 100)
   }, 0)
   return Math.round(total / tasks.length)
 }
 
-/** Derives milestone state from completed related work and its planned timeline. */
+export interface MilestoneDelivery {
+  sprintCount: number
+  completedSprintCount: number
+  taskCount: number
+  completedTaskCount: number
+  progress: number
+  hasLinkedWork: boolean
+  isComplete: boolean
+}
+
+/** Combines direct task links with tasks inherited through a linked sprint. */
+export function calculateMilestoneDelivery(
+  milestoneId: string,
+  sprints: Sprint[],
+  tasks: Task[],
+  finalStatus = 'done',
+): MilestoneDelivery {
+  const linkedSprints = sprints.filter((sprint) => sprint.milestoneId === milestoneId)
+  const sprintById = new Map(sprints.map((sprint) => [sprint.id, sprint]))
+  const relatedTasks = tasks.filter((task) => {
+    const inheritedMilestoneId = task.sprintId ? sprintById.get(task.sprintId)?.milestoneId : undefined
+    return (inheritedMilestoneId ?? task.milestoneId) === milestoneId
+  })
+  const completedSprintCount = linkedSprints.filter((sprint) => sprint.status === 'completed').length
+  const completedTaskCount = relatedTasks.filter((task) => task.status === finalStatus).length
+  const linkedWorkCount = linkedSprints.length + relatedTasks.length
+  const completedWorkCount = completedSprintCount + completedTaskCount
+
+  return {
+    sprintCount: linkedSprints.length,
+    completedSprintCount,
+    taskCount: relatedTasks.length,
+    completedTaskCount,
+    progress: linkedWorkCount ? Math.round((completedWorkCount / linkedWorkCount) * 100) : 0,
+    hasLinkedWork: linkedWorkCount > 0,
+    isComplete: linkedWorkCount > 0 && completedWorkCount === linkedWorkCount,
+  }
+}
+
+function localDateKey(date: Date) {
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${date.getFullYear()}-${month}-${day}`
+}
+
+/** Milestones have no duration: they are complete when linked work is done, or delayed after their due date. */
 export function calculateMilestoneStatus(
-  relatedTaskCount: number,
-  actualProgress: number,
-  scheduleHealth: ScheduleHealthResult | undefined,
+  dueDate: string,
+  isComplete: boolean,
+  now = new Date(),
 ): MilestoneStatus {
-  if (relatedTaskCount > 0 && actualProgress >= 100) return 'completed'
-  return scheduleHealth?.status ?? 'on_track'
+  if (isComplete) return 'completed'
+  return localDateKey(now) > dueDate.slice(0, 10) ? 'delayed' : 'on_track'
 }
 
 export const SCHEDULE_HEALTH_LABEL: Record<ScheduleHealth, string> = {

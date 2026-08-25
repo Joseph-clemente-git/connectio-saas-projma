@@ -1,6 +1,6 @@
-import { useOutletContext, useParams } from 'react-router-dom'
+import { Link, useOutletContext, useParams, useSearchParams } from 'react-router-dom'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { AlertTriangle, Layers, ListChecks, Lock, Repeat } from 'lucide-react'
+import { AlertTriangle, Flag, Layers, ListChecks, Lock, Repeat, Settings2 } from 'lucide-react'
 import { format } from 'date-fns'
 import { db } from '@/db/schema'
 import type { TenantOutletContext } from '@/layouts/tenant-app-layout'
@@ -9,6 +9,7 @@ import { Breadcrumbs } from '@/components/shared/breadcrumbs'
 import { EmptyState } from '@/components/shared/empty-state'
 import { LoadingScreen } from '@/components/shared/loading-screen'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
@@ -25,12 +26,19 @@ import { FileExplorer } from '@/components/files/file-explorer'
 import { AnnouncementsAlert, PinsAndAnnouncements } from '@/components/shared/pins-and-announcements'
 import { hasFeature } from '@/lib/entitlements'
 import { canManageOrg } from '@/lib/permissions'
-import { useOrgMemberRole } from '@/hooks/use-session-data'
-import type { ProjectStatus } from '@/types/domain'
+import { useOrgMemberRole, useOrgMembersWithUsers } from '@/hooks/use-session-data'
+import type { MilestoneStatus, ProjectStatus } from '@/types/domain'
 import { RecurringReportsPanel } from '@/components/shared/recurring-reports-panel'
 import { ReleaseNotesPanel } from '@/components/project/release-notes-panel'
 import { calculateScheduleHealth, calculateTaskProgress, SCHEDULE_HEALTH_LABEL, SCHEDULE_HEALTH_VARIANT } from '@/lib/schedule-health'
-import { DEFAULT_TERMINOLOGY } from '@/lib/project-workflow'
+import { DEFAULT_TERMINOLOGY, workflowStages } from '@/lib/project-workflow'
+import { ProjectSettingsPanel } from '@/components/project/project-settings-panel'
+import { useMilestoneCompletion } from '@/hooks/use-milestone-completion'
+
+const PROJECT_VIEWS = new Set([
+  'overview', 'board', 'task-data', 'reports', 'sprints', 'milestones', 'gantt',
+  'release-notes', 'links', 'pinned', 'files', 'support', 'settings',
+])
 
 const STATUS_VARIANT: Record<ProjectStatus, 'default' | 'secondary' | 'success' | 'warning' | 'outline'> = {
   planning: 'secondary',
@@ -47,10 +55,30 @@ const STATUS_LABEL: Record<ProjectStatus, string> = {
   archived: 'Archived',
 }
 
+const MILESTONE_STATUS_VARIANT: Record<MilestoneStatus, 'success' | 'warning' | 'destructive'> = {
+  completed: 'success',
+  on_track: 'success',
+  at_risk: 'warning',
+  delayed: 'destructive',
+}
+const MILESTONE_STATUS_LABEL: Record<MilestoneStatus, string> = {
+  completed: 'Completed',
+  on_track: 'On track',
+  at_risk: 'At risk',
+  delayed: 'Delayed',
+}
+
 export function ProjectDetailPage() {
   const { org, user: currentUser, plan } = useOutletContext<TenantOutletContext>()
   const { projectId } = useParams()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const requestedView = searchParams.get('view')
+  const activeView = requestedView && PROJECT_VIEWS.has(requestedView) ? requestedView : 'overview'
   const project = useLiveQuery(() => (projectId ? db.projects.get(projectId) : undefined), [projectId])
+  const stages = project ? workflowStages(project) : []
+  const finalStageId = stages.at(-1)?.id ?? 'done'
+  useMilestoneCompletion(projectId, finalStageId)
+  const reviewStageIds = new Set(stages.filter((stage) => stage.requiresReview).map((stage) => stage.id))
   const workspace = useLiveQuery(
     () => (project ? db.workspaces.get(project.workspaceId) : undefined),
     [project?.workspaceId],
@@ -60,22 +88,28 @@ export function ProjectDetailPage() {
     const tasks = await db.tasks.where('projectId').equals(projectId).toArray()
     return {
       total: tasks.length,
-      done: tasks.filter((t) => t.status === 'done' && t.reviewState === 'approved').length,
-      actualProgress: calculateTaskProgress(tasks),
-      inProgress: tasks.filter((t) => t.status === 'in_progress').length,
-      inReview: tasks.filter((t) => t.status === 'in_review').length,
-      unassigned: tasks.filter((t) => t.status !== 'done' && !t.assigneeId).length,
+      done: tasks.filter((t) => t.status === finalStageId && (reviewStageIds.size === 0 || t.reviewState === 'approved')).length,
+      actualProgress: calculateTaskProgress(tasks, finalStageId),
+      inProgress: tasks.filter((t) => t.status !== stages[0]?.id && t.status !== finalStageId && !reviewStageIds.has(t.status)).length,
+      inReview: tasks.filter((t) => reviewStageIds.has(t.status)).length,
+      unassigned: tasks.filter((t) => t.status !== finalStageId && !t.assigneeId).length,
       reviewRisks: tasks.filter((t) =>
-        (t.status === 'in_review' && (!t.reviewerId || t.reviewerId === t.assigneeId)) ||
-        (t.status === 'done' && t.reviewState !== 'approved'),
+        (reviewStageIds.has(t.status) && (!t.reviewerId || t.reviewerId === t.assigneeId)) ||
+        (t.status === finalStageId && reviewStageIds.size > 0 && t.reviewState !== 'approved'),
       ).length,
-      overdue: tasks.filter((t) => t.status !== 'done' && t.dueDate && new Date(t.dueDate) < new Date()).length,
+      overdue: tasks.filter((t) => t.status !== finalStageId && t.dueDate && new Date(t.dueDate) < new Date()).length,
     }
-  }, [projectId])
+  }, [projectId, project])
   const sprintCount = useLiveQuery(
     () => (projectId ? db.sprints.where('projectId').equals(projectId).count() : 0),
     [projectId],
   )
+  const overviewMilestones = useLiveQuery(async () => {
+    if (!projectId) return []
+    const milestones = await db.milestones.where('projectId').equals(projectId).sortBy('dueDate')
+    return [...milestones.filter((milestone) => milestone.status !== 'completed'), ...milestones.filter((milestone) => milestone.status === 'completed')].slice(0, 3)
+  }, [projectId])
+  const members = useOrgMembersWithUsers(org.id)
   const myMembership = useOrgMemberRole(org.id, currentUser.id)
   const canManage = canManageOrg(myMembership)
 
@@ -122,7 +156,16 @@ export function ProjectDetailPage() {
       />
       <AnnouncementsAlert projectId={project.id} />
 
-      <Tabs defaultValue="overview" className="flex flex-1 flex-col">
+      <Tabs
+        value={activeView}
+        onValueChange={(view) => {
+          const next = new URLSearchParams(searchParams)
+          if (view === 'overview') next.delete('view')
+          else next.set('view', view)
+          setSearchParams(next)
+        }}
+        className="flex flex-1 flex-col"
+      >
         <div className="scrollbar-thin overflow-x-auto border-b border-border bg-card px-6 py-3">
           <div className="flex w-max min-w-full items-center justify-between gap-6">
             <TabsList aria-label="Project work views" className="w-max">
@@ -146,6 +189,9 @@ export function ProjectDetailPage() {
               <TabsTrigger value="support">
                 {!hasFeature(plan, 'projectTicketing') && <Lock className="size-3" />} Support
               </TabsTrigger>
+              <TabsTrigger value="settings">
+                <Settings2 aria-hidden="true" className="size-3.5" /> Settings
+              </TabsTrigger>
             </TabsList>
           </div>
         </div>
@@ -163,6 +209,11 @@ export function ProjectDetailPage() {
               <CardContent className="flex flex-col gap-4">
                 <p className="text-sm text-muted-foreground">{project.description ?? 'No description yet.'}</p>
 
+                <div className="flex flex-wrap items-center gap-2" aria-label={`Project status: ${STATUS_LABEL[project.status]}`}>
+                  <span className="text-sm text-muted-foreground">Project status</span>
+                  <Badge variant={STATUS_VARIANT[project.status]}>{STATUS_LABEL[project.status]}</Badge>
+                </div>
+
                 {hasFeature(plan, 'projectScheduling') ? (
                   <div className="grid max-w-sm grid-cols-2 gap-3">
                     <div className="flex flex-col gap-1.5">
@@ -172,6 +223,8 @@ export function ProjectDetailPage() {
                       <Input
                         id="proj-start"
                         type="date"
+                        max={project.endDate?.slice(0, 10)}
+                        disabled={!canManageProject}
                         value={project.startDate ? project.startDate.slice(0, 10) : ''}
                         onChange={(e) =>
                           db.projects.update(project.id, {
@@ -187,6 +240,8 @@ export function ProjectDetailPage() {
                       <Input
                         id="proj-end"
                         type="date"
+                        min={project.startDate?.slice(0, 10)}
+                        disabled={!canManageProject}
                         value={project.endDate ? project.endDate.slice(0, 10) : ''}
                         onChange={(e) =>
                           db.projects.update(project.id, {
@@ -256,6 +311,16 @@ export function ProjectDetailPage() {
                 </div>
               </CardContent>
             </Card>
+
+            <Card className="lg:col-span-3">
+              <CardHeader className="flex-row items-center justify-between space-y-0">
+                <div><CardTitle>Milestones</CardTitle><p className="mt-1 text-sm text-muted-foreground">The next outcomes this project is working toward.</p></div>
+                <Button asChild size="sm" variant="outline"><Link to="?view=milestones">View all</Link></Button>
+              </CardHeader>
+              <CardContent>
+                {overviewMilestones?.length ? <div className="divide-y divide-border rounded-lg border border-border">{overviewMilestones.map((milestone) => <Link key={milestone.id} to="?view=milestones" className="flex min-h-14 flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3 transition-colors hover:bg-muted/50"><span className="flex min-w-0 items-center gap-2"><Flag aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" /><span className="truncate text-sm font-medium text-foreground">{milestone.name}</span></span><span className="flex items-center gap-3"><span className="text-xs text-muted-foreground">{milestone.completedAt ? `Completed ${format(new Date(milestone.completedAt), 'MMM d, yyyy')}` : `Due ${format(new Date(milestone.dueDate), 'MMM d, yyyy')}`}</span><Badge variant={MILESTONE_STATUS_VARIANT[milestone.status]}>{MILESTONE_STATUS_LABEL[milestone.status]}</Badge></span></Link>)}</div> : <p className="text-sm text-muted-foreground">No milestones yet. Add one to set a key project outcome and target date.</p>}
+              </CardContent>
+            </Card>
           </div>
         </TabsContent>
 
@@ -276,7 +341,7 @@ export function ProjectDetailPage() {
         </TabsContent>
 
         <TabsContent value="sprints" className="flex-1">
-          <SprintsPanel projectId={project.id} terminology={terminology} canManage={canManageProject} />
+          <SprintsPanel projectId={project.id} terminology={terminology} canManage={canManageProject} finalStageId={finalStageId} />
         </TabsContent>
 
         <TabsContent value="links" className="flex-1 overflow-y-auto p-6">
@@ -293,7 +358,7 @@ export function ProjectDetailPage() {
 
         <TabsContent value="milestones" className="flex flex-1 flex-col">
           <FeatureGate plan={plan} feature="milestones" label={terminology.milestonePlural}>
-            <MilestonesPanel projectId={project.id} canManage={canManageProject} />
+            <MilestonesPanel projectId={project.id} canManage={canManageProject} finalStageId={finalStageId} />
           </FeatureGate>
         </TabsContent>
 
@@ -307,6 +372,27 @@ export function ProjectDetailPage() {
           <FeatureGate plan={plan} feature="projectTicketing" label="Project Ticketing">
             <SupportPanel orgId={org.id} orgSlug={org.slug} projectId={project.id} plan={plan} />
           </FeatureGate>
+        </TabsContent>
+
+        <TabsContent value="settings" className="mt-0 flex-1 overflow-y-auto p-4 sm:p-6">
+          <div className="mx-auto max-w-6xl space-y-5">
+            <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
+              <div>
+                <h2 className="text-lg font-semibold text-foreground">Project settings</h2>
+                <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+                  Manage this project&apos;s responsibilities, delivery stages, review rules, and terminology.
+                </p>
+              </div>
+              <Button asChild variant="outline" size="sm">
+                <Link to={`/app/${org.slug}/settings/workflows?view=templates`}>Manage reusable templates</Link>
+              </Button>
+            </div>
+            <ProjectSettingsPanel
+              project={project}
+              members={members?.map(({ user }) => user) ?? []}
+              canManage={canManageProject}
+            />
+          </div>
         </TabsContent>
       </Tabs>
     </div>

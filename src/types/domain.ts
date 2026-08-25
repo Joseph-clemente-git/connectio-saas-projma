@@ -84,6 +84,8 @@ export interface OrganizationInvitation {
   tokenHash: string
   expiresAt: string
   status: 'pending' | 'accepted' | 'expired' | 'revoked'
+  /** New account prepared for this invitation; it becomes a member only after acceptance. */
+  provisionedUserId?: ID
   acceptedByUserId?: ID
   acceptedAt?: string
   createdAt: string
@@ -478,10 +480,12 @@ export interface Milestone {
   id: ID
   projectId: ID
   name: string
-  /** Planned start is required to calculate schedule health against its due date. */
-  startDate: string
+  /** @deprecated Legacy value retained while existing IndexedDB records age out. */
+  startDate?: string
   dueDate: string
   status: MilestoneStatus
+  /** Automatically recorded when all linked work is completed. */
+  completedAt?: string
 }
 
 export type CalendarEventType = 'project_kickoff' | 'client_meeting' | 'team_meeting' | 'site_inspection' | 'production_schedule' | 'review' | 'approval' | 'deadline' | 'project_event'

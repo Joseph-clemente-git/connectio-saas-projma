@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Building2, CheckCircle2, Clock3, LoaderCircle, Mail, ShieldCheck, Waypoints } from 'lucide-react'
-import { acceptInvitation, getInvitationByToken, validateSession } from '@/lib/auth'
+import { acceptInvitation, acceptProvisionedInvitation, getInvitationByToken, validateSession } from '@/lib/auth'
 import { db } from '@/db/schema'
 import { useSession } from '@/store/session'
 import type { Organization, OrganizationInvitation, User } from '@/types/domain'
@@ -33,10 +33,16 @@ export function InvitationPage() {
   }, [session.sessionToken, session.userId, token])
 
   async function accept() {
-    if (!session.userId) return
     setSubmitting(true)
     setError('')
     try {
+      if (context?.invitation.provisionedUserId) {
+        const accepted = await acceptProvisionedInvitation(token)
+        session.signIn(accepted.user.id, accepted.orgId, accepted.token)
+        navigate('/change-password?next=%2Fapp', { replace: true })
+        return
+      }
+      if (!session.userId) return
       const orgId = await acceptInvitation(token, session.userId)
       session.switchOrg(orgId)
       navigate('/app', { replace: true })
@@ -48,6 +54,7 @@ export function InvitationPage() {
   if (context === undefined) return <div className="flex min-h-svh items-center justify-center bg-background"><LoaderCircle className="size-7 animate-spin text-primary" aria-label="Loading invitation" /></div>
   const invalid = !context || context.invitation.status !== 'pending'
   const authQuery = encodeURIComponent(token)
+  const provisioned = context?.invitation.provisionedUserId !== undefined
 
   return (
     <main className="flex min-h-svh items-center justify-center bg-background px-4 py-10">
@@ -66,7 +73,7 @@ export function InvitationPage() {
               <div className="flex items-center justify-between gap-4 py-3"><dt className="flex items-center gap-2 text-muted-foreground"><Mail className="size-4" />Invited email</dt><dd className="truncate font-medium">{context.invitation.targetEmail}</dd></div>
             </dl>
             {error && <div role="alert" className="rounded-lg border border-destructive/20 bg-destructive/5 p-3 text-sm text-destructive">{error}</div>}
-            {authenticated ? <Button size="lg" className="w-full" onClick={() => void accept()} disabled={submitting}>{submitting ? <LoaderCircle className="animate-spin" /> : <CheckCircle2 />}{submitting ? 'Joining…' : 'Accept invitation'}</Button> : <div className="grid gap-3 sm:grid-cols-2"><Button asChild size="lg"><Link to={`/login?invite=${authQuery}`}>Sign in</Link></Button><Button asChild size="lg" variant="outline"><Link to={`/register?invite=${authQuery}`}>Create account</Link></Button></div>}
+            {provisioned || authenticated ? <><Button size="lg" className="w-full" onClick={() => void accept()} disabled={submitting}>{submitting ? <LoaderCircle className="animate-spin" /> : <CheckCircle2 />}{submitting ? 'Accepting…' : 'Accept invitation'}</Button>{provisioned && <p className="text-center text-xs leading-5 text-muted-foreground">After accepting, you’ll create a private password before entering the organization.</p>}</> : <div className="grid gap-3 sm:grid-cols-2"><Button asChild size="lg"><Link to={`/login?invite=${authQuery}`}>Sign in</Link></Button><Button asChild size="lg" variant="outline"><Link to={`/register?invite=${authQuery}`}>Create account</Link></Button></div>}
           </CardContent>}
         </Card>
       </div>

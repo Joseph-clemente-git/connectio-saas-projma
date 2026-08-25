@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { useOrgMembersWithUsers } from '@/hooks/use-session-data'
 import type { Project, Task, TaskPriority } from '@/types/domain'
+import { workflowStages } from '@/lib/project-workflow'
 
 const fields = [
   ['id', 'Task ID'], ['title', 'Title'], ['description', 'Description'], ['status', 'Status'],
@@ -37,6 +38,9 @@ function dateValue(raw: string | undefined) {
 }
 
 export function TaskImportExportPanel({ project, orgId, currentUserId, canManage }: { project: Project; orgId: string; currentUserId: string; canManage: boolean }) {
+  const stages = workflowStages(project)
+  const initialStageId = stages[0]?.id ?? 'backlog'
+  const finalStageId = stages.at(-1)?.id ?? 'done'
   const inputRef = useRef<HTMLInputElement>(null)
   const tasks = useLiveQuery(() => db.tasks.where('projectId').equals(project.id).sortBy('order'), [project.id])
   const sprints = useLiveQuery(() => db.sprints.where('projectId').equals(project.id).toArray(), [project.id])
@@ -56,7 +60,7 @@ export function TaskImportExportPanel({ project, orgId, currentUserId, canManage
     if (values.completion && (!Number.isFinite(Number(values.completion)) || Number(values.completion) < 0 || Number(values.completion) > 100)) errors.push('Completion must be 0–100')
     if (values.startDate && !dateValue(values.startDate)) errors.push('Start date is invalid')
     if (values.dueDate && !dateValue(values.dueDate)) errors.push('Due date is invalid')
-    if (values.status && !project.workflowStages?.some((stage) => stage.id === values.status) && !['backlog', 'todo', 'in_progress', 'in_review', 'done'].includes(values.status)) errors.push('Status is not in this project workflow')
+    if (values.status && !stages.some((stage) => stage.id === values.status)) errors.push('Status is not in this project workflow')
     return { row, values, errors }
   })
   const validRows = prepared.filter((item) => item.errors.length === 0)
@@ -92,7 +96,7 @@ export function TaskImportExportPanel({ project, orgId, currentUserId, canManage
         const assignee = members?.find((entry) => [entry.user.id, entry.user.name, entry.user.email].some((value) => value.toLowerCase() === values.assignee?.toLowerCase()))?.user
         const sprint = sprints?.find((item) => [item.id, item.name].some((value) => value.toLowerCase() === values.sprint?.toLowerCase()))
         const milestone = milestones?.find((item) => [item.id, item.name].some((value) => value.toLowerCase() === values.milestone?.toLowerCase()))
-        return { id: values.id || crypto.randomUUID(), projectId: project.id, title: values.title!, description: values.description || undefined, status: values.status || 'backlog', priority: (values.priority?.toLowerCase() as TaskPriority) || 'medium', assigneeId: assignee?.id, sprintId: sprint?.id, milestoneId: milestone?.id, startDate: dateValue(values.startDate), dueDate: dateValue(values.dueDate), completion: values.completion ? Number(values.completion) : undefined, labels: values.labels ? values.labels.split(',').map((label) => label.trim()).filter(Boolean) : undefined, createdById: currentUserId, order: startOrder + index, createdAt: now }
+        return { id: values.id || crypto.randomUUID(), projectId: project.id, title: values.title!, description: values.description || undefined, status: values.status || initialStageId, priority: (values.priority?.toLowerCase() as TaskPriority) || 'medium', assigneeId: assignee?.id, sprintId: sprint?.id, milestoneId: sprint?.milestoneId ? undefined : milestone?.id, startDate: dateValue(values.startDate), dueDate: dateValue(values.dueDate), completion: values.completion ? Number(values.completion) : undefined, labels: values.labels ? values.labels.split(',').map((label) => label.trim()).filter(Boolean) : undefined, createdById: currentUserId, order: startOrder + index, createdAt: now }
       }))
       await db.auditLogs.add({ id: crypto.randomUUID(), orgId, actorName: members?.find((entry) => entry.user.id === currentUserId)?.user.name ?? 'Unknown member', action: `imported ${validRows.length} task${validRows.length === 1 ? '' : 's'} from ${fileName}`, target: project.name, createdAt: now })
     })
@@ -104,7 +108,7 @@ export function TaskImportExportPanel({ project, orgId, currentUserId, canManage
     const rows = (tasks ?? []).map((task) => ({
       'Task ID': task.id, Title: task.title, Description: task.description ?? '', Status: task.status,
       Assignee: members?.find((entry) => entry.user.id === task.assigneeId)?.user.name ?? '', Priority: task.priority,
-      'Start date': task.startDate?.slice(0, 10) ?? '', 'Due date': task.dueDate?.slice(0, 10) ?? '', Sprint: sprints?.find((item) => item.id === task.sprintId)?.name ?? '', Milestone: milestones?.find((item) => item.id === task.milestoneId)?.name ?? '', Completion: task.completion ?? (task.status === 'done' ? 100 : 0), Labels: task.labels?.join(', ') ?? '',
+      'Start date': task.startDate?.slice(0, 10) ?? '', 'Due date': task.dueDate?.slice(0, 10) ?? '', Sprint: sprints?.find((item) => item.id === task.sprintId)?.name ?? '', Milestone: milestones?.find((item) => item.id === (sprints?.find((sprint) => sprint.id === task.sprintId)?.milestoneId ?? task.milestoneId))?.name ?? '', Completion: task.completion ?? (task.status === finalStageId ? 100 : 0), Labels: task.labels?.join(', ') ?? '',
     }))
     saveWorkbook(rows, `${project.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-tasks`, type)
   }

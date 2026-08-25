@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 
-test('owner onboarding and secure temporary-password member invite work without tenant seed data', async ({ page }) => {
+test('invitation acceptance forces a new member to create a private password', async ({ page }) => {
   test.setTimeout(60_000)
   await page.goto('http://127.0.0.1:5173/register')
   await page.getByLabel('Full name').fill('Lifecycle Owner')
@@ -40,16 +40,16 @@ test('owner onboarding and secure temporary-password member invite work without 
   await page.getByLabel('Full name').fill('Invited Member')
   await page.getByLabel('Email').fill('member@lifecycle.test')
   await page.getByRole('button', { name: 'Invite member', exact: true }).click()
-  await expect(page.getByText('Member invited successfully')).toBeVisible()
-  const loginUrl = await page.locator('#invited-login-url').inputValue()
+  await expect(page.getByText('Invitation ready to share')).toBeVisible()
+  const invitationUrl = await page.locator('#invitation-url').inputValue()
   const temporaryPassword = await page.locator('#temporary-password').inputValue()
-  expect(loginUrl).toContain('/login?email=')
+  expect(invitationUrl).toContain('/invite/')
   expect(temporaryPassword.length).toBeGreaterThanOrEqual(12)
 
   await page.evaluate(() => localStorage.removeItem('connectio-session'))
-  await page.goto(loginUrl)
-  await page.locator('#login-password').fill(temporaryPassword)
-  await page.getByRole('button', { name: 'Sign in' }).click()
+  await page.goto(invitationUrl)
+  await expect(page.getByRole('heading', { name: 'Join Lifecycle Studio' })).toBeVisible()
+  await page.getByRole('button', { name: 'Accept invitation' }).click()
   await expect(page).toHaveURL(/\/change-password/)
   await page.getByLabel('New password', { exact: true }).fill('MemberSecure!2026')
   await page.getByLabel('Confirm new password').fill('MemberSecure!2026')

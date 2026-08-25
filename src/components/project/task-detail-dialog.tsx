@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { AlertCircle, Check, ClipboardPlus, Eye, FileImage, FileText, MessageCircle, Paperclip, Plus, RotateCcw, Send, Trash2, UserRound, X } from 'lucide-react'
+import { AlertCircle, Check, ClipboardPlus, Eye, FileImage, FileText, Flag, MessageCircle, Paperclip, Plus, RotateCcw, Send, Trash2, UserRound, X } from 'lucide-react'
 import { db } from '@/db/schema'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
@@ -47,6 +47,7 @@ export function TaskDetailDialog({
   const members = useOrgMembersWithUsers(orgId)
   const teams = useLiveQuery(() => db.teams.where('orgId').equals(orgId).toArray(), [orgId])
   const sprints = useLiveQuery(() => db.sprints.where('projectId').equals(project.id).toArray(), [project.id])
+  const milestones = useLiveQuery(() => db.milestones.where('projectId').equals(project.id).sortBy('dueDate'), [project.id])
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [newSubtask, setNewSubtask] = useState('')
@@ -69,24 +70,26 @@ export function TaskDetailDialog({
 
   if (!task) return null
   const activeTask = task
+  const stages = workflowStages(project)
+  const reviewStageIndex = stages.findIndex((stage) => stage.requiresReview)
+  const reworkStageId = stages[Math.max(reviewStageIndex > 0 ? reviewStageIndex - 1 : stages.length - 2, 0)]?.id ?? stages[0]?.id ?? activeTask.status
 
   function patch(fields: Partial<Task>) {
     if (!taskId) return
     const invalidatesApproval = activeTask.reviewState === 'approved' &&
       ['title', 'description', 'assigneeId', 'reviewerId'].some((key) => key in fields)
     db.tasks.update(taskId, invalidatesApproval
-      ? { ...fields, status: 'in_progress', reviewState: undefined, reviewedAt: undefined }
+      ? { ...fields, status: reworkStageId, reviewState: undefined, reviewedAt: undefined }
       : fields)
   }
 
   function invalidateApprovedReview() {
     if (activeTask.reviewState === 'approved') {
-      void db.tasks.update(activeTask.id, { status: 'in_progress', reviewState: undefined, reviewedAt: undefined })
+      void db.tasks.update(activeTask.id, { status: reworkStageId, reviewState: undefined, reviewedAt: undefined })
     }
   }
 
   function changeStatus(status: TaskStatus) {
-    const stages = workflowStages(project)
     const destination = stages.find((stage) => stage.id === status)
     if (status !== stages[0]?.id && !activeTask.sprintId) {
       setFlowError('Add this task to a sprint before moving it into planned work.')
@@ -173,6 +176,9 @@ export function TaskDetailDialog({
   const canReview = currentStage?.requiresReview && (currentStage.reviewerIds?.includes(currentUserId) || currentStage.reviewerTeamIds?.some((teamId) => teams?.find((team) => team.id === teamId)?.memberIds.includes(currentUserId)) || task.reviewerId === currentUserId)
   const canCoordinateTask = canManage || project.coordinatorId === currentUserId
   const canExecuteTask = canCoordinateTask || task.assigneeId === currentUserId
+  const selectedSprint = sprints?.find((sprint) => sprint.id === task.sprintId)
+  const inheritedMilestoneId = selectedSprint?.milestoneId
+  const effectiveMilestoneId = inheritedMilestoneId ?? task.milestoneId
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -297,7 +303,7 @@ export function TaskDetailDialog({
             </div>
             <div className="flex flex-col gap-1.5">
               <Label>Sprint <span className="text-destructive">*</span></Label>
-              <Select disabled={!canCoordinateTask} value={task.sprintId ?? 'unplanned'} onValueChange={(v) => { patch({ sprintId: v === 'unplanned' ? undefined : v }); setFlowError(null) }}>
+              <Select disabled={!canCoordinateTask} value={task.sprintId ?? 'unplanned'} onValueChange={(v) => { const sprint = sprints?.find((item) => item.id === v); patch({ sprintId: v === 'unplanned' ? undefined : v, milestoneId: sprint?.milestoneId ? undefined : task.milestoneId }); setFlowError(null) }}>
                 <SelectTrigger><SelectValue placeholder="Choose sprint" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="unplanned">Unplanned backlog</SelectItem>
@@ -305,6 +311,17 @@ export function TaskDetailDialog({
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">Only sprint work appears on the delivery board.</p>
+            </div>
+            <div className="col-span-2 flex flex-col gap-1.5">
+              <Label>Milestone</Label>
+              <Select disabled={!canCoordinateTask || Boolean(inheritedMilestoneId)} value={effectiveMilestoneId ?? 'none'} onValueChange={(v) => patch({ milestoneId: v === 'none' ? undefined : v })}>
+                <SelectTrigger><SelectValue placeholder="No milestone" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">No milestone</SelectItem>
+                  {milestones?.map((milestone) => <SelectItem key={milestone.id} value={milestone.id}>{milestone.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <p className="flex items-center gap-1 text-xs text-muted-foreground"><Flag aria-hidden="true" className="size-3" />{inheritedMilestoneId ? `Inherited from ${selectedSprint?.name}. Change the sprint link to choose a different milestone.` : 'Directly link this task when its sprint does not already define the milestone.'}</p>
             </div>
             <div className="col-span-2 flex items-center justify-between rounded-lg border border-border p-3">
               <div><p className="text-sm font-medium text-foreground">Blocker</p><p className="text-xs text-muted-foreground">Show this task as blocked everywhere it appears.</p></div>

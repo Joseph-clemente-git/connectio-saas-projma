@@ -224,11 +224,13 @@ export interface ProvisionedMemberResult {
   user: User
   temporaryPassword?: string
   isNewAccount: boolean
+  invitation: OrganizationInvitation
+  token: string
 }
 
 /**
- * Adds a member immediately. New accounts receive a one-time temporary password;
- * existing Connectio accounts keep their current credentials.
+ * Creates a pending invitation. New accounts receive a one-time temporary
+ * password, but membership is not granted until the invitation is accepted.
  */
 export async function provisionInvitedMember(input: {
   orgId: string
@@ -275,16 +277,15 @@ export async function provisionInvitedMember(input: {
     }
   }
   try {
-    await db.transaction('rw', [db.orgMembers, db.invitations], async () => {
-      await db.orgMembers.add({
-        id: crypto.randomUUID(), orgId: input.orgId, userId: user.id, role: input.role,
-        teamIds: [], workspaceIds: input.workspaceIds ?? [], canReview: input.canReview, joinedAt: now,
-      })
-      const pendingIds = await db.invitations.where('orgId').equals(input.orgId)
-        .filter((entry) => entry.targetEmail === email && entry.status === 'pending')
-        .primaryKeys()
-      await Promise.all(pendingIds.map((id) => db.invitations.update(id, { status: 'revoked' })))
+    const result = await createInvitation({
+      orgId: input.orgId, inviterId: input.inviterId, email, role: input.role,
+      workspaceIds: input.workspaceIds, canReview: input.canReview,
     })
+    await db.invitations.update(result.invitation.id, { provisionedUserId: existingUser ? undefined : user.id })
+    return {
+      user, temporaryPassword, isNewAccount: !existingUser, token: result.token,
+      invitation: { ...result.invitation, provisionedUserId: existingUser ? undefined : user.id },
+    }
   } catch (cause) {
     if (!existingUser) {
       await db.authCredentials.delete(user.id)
@@ -292,8 +293,6 @@ export async function provisionInvitedMember(input: {
     }
     throw cause
   }
-
-  return { user, temporaryPassword, isNewAccount: !existingUser }
 }
 
 export async function replaceTemporaryPassword(input: {
@@ -411,6 +410,8 @@ export async function acceptInvitation(token: string, userId: string): Promise<s
   const existing = await db.orgMembers.where('[orgId+userId]').equals([invitation.orgId, userId]).first()
   const now = new Date().toISOString()
   await db.transaction('rw', [db.orgMembers, db.invitations], async () => {
+    const currentInvitation = await db.invitations.get(invitation.id)
+    if (!currentInvitation || currentInvitation.status !== 'pending') throw new Error('This invitation has already been used.')
     if (!existing) {
       await db.orgMembers.add({
         id: crypto.randomUUID(),
@@ -426,4 +427,28 @@ export async function acceptInvitation(token: string, userId: string): Promise<s
     await db.invitations.update(invitation.id, { status: 'accepted', acceptedByUserId: userId, acceptedAt: now })
   })
   return invitation.orgId
+}
+
+/** Accepts a new-account invitation using its single-use token and starts the
+ * restricted session that must proceed to password replacement. */
+export async function acceptProvisionedInvitation(token: string): Promise<AuthenticatedSession & { orgId: string }> {
+  const invitation = await getInvitationByToken(token)
+  if (!invitation || invitation.status !== 'pending' || !invitation.provisionedUserId) {
+    throw new Error('This invitation is invalid or has expired.')
+  }
+  const user = await db.users.get(invitation.provisionedUserId)
+  const credential = user ? await db.authCredentials.get(user.id) : undefined
+  if (!user || !credential || !credential.mustChangePassword || user.email !== invitation.targetEmail) {
+    throw new Error('This invitation is invalid or has expired.')
+  }
+
+  const orgId = await acceptInvitation(token, user.id)
+  const sessionToken = randomToken()
+  const now = new Date()
+  await db.authSessions.add({
+    id: crypto.randomUUID(), userId: user.id, tokenHash: await sha256(sessionToken),
+    createdAt: now.toISOString(), lastSeenAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + SESSION_LIFETIME_MS).toISOString(),
+  })
+  return { user, token: sessionToken, mustChangePassword: true, orgId }
 }

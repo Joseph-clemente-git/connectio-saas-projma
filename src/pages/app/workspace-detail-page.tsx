@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useOutletContext, useNavigate, useParams, Link } from 'react-router-dom'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { ChevronRight, FolderKanban } from 'lucide-react'
+import { ChevronRight, FolderKanban, Pencil } from 'lucide-react'
 import { db } from '@/db/schema'
 import type { TenantOutletContext } from '@/layouts/tenant-app-layout'
 import { PageHeader } from '@/components/shared/page-header'
@@ -18,7 +18,7 @@ import { useOrgMembersWithUsers, useOrgUsage } from '@/hooks/use-session-data'
 import { LoadingScreen } from '@/components/shared/loading-screen'
 import { LinksManager } from '@/components/shared/links-manager'
 import type { ProjectStatus } from '@/types/domain'
-import { WORKFLOW_PRESETS, stagesForPreset, terminologyForPreset } from '@/lib/project-workflow'
+import { WORKFLOW_PRESETS, stagesForPreset, terminologyForPreset, workflowStages } from '@/lib/project-workflow'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { FileExplorer } from '@/components/files/file-explorer'
 import { AnnouncementsAlert, PinsAndAnnouncements } from '@/components/shared/pins-and-announcements'
@@ -57,20 +57,30 @@ export function WorkspaceDetailPage() {
   )
   const allTasks = useLiveQuery(() => db.tasks.toArray(), [])
   const workflowSets = useLiveQuery(() => db.workflowSets.where('orgId').equals(org.id).toArray(), [org.id])
+  const teams = useLiveQuery(() => db.teams.where('orgId').equals(org.id).toArray(), [org.id])
   const usage = useOrgUsage(org.id)
   const members = useOrgMembersWithUsers(org.id)
   const myMembership = useOrgMemberRole(org.id, currentUser.id)
+  const canManage = canManageOrg(myMembership)
 
   const [open, setOpen] = useState(false)
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [workflowPreset, setWorkflowPreset] = useState('general')
   const [reviewerId, setReviewerId] = useState('unassigned')
+  const [editOpen, setEditOpen] = useState(false)
+  const [editName, setEditName] = useState('')
+  const [editDescription, setEditDescription] = useState('')
+  const [editTeamId, setEditTeamId] = useState('unassigned')
+  const [editWorkflowPreset, setEditWorkflowPreset] = useState('general')
+  const [savingWorkspace, setSavingWorkspace] = useState(false)
 
   async function create() {
     if (!name.trim() || !workspaceId) return
+    const projectId = crypto.randomUUID()
+    const selectedWorkflowSet = workflowSets?.find((set) => set.id === workflowPreset)
     await db.projects.add({
-      id: crypto.randomUUID(),
+      id: projectId,
       orgId: org.id,
       workspaceId,
       name: name.trim(),
@@ -79,9 +89,9 @@ export function WorkspaceDetailPage() {
       coordinatorId: currentUser.id,
       reviewerId: reviewerId === 'unassigned' ? undefined : reviewerId,
       workflowLabels: WORKFLOW_PRESETS[workflowPreset]?.labels,
-      workflowSetId: workflowSets?.some((set) => set.id === workflowPreset) ? workflowPreset : undefined,
-      workflowStages: workflowSets?.find((set) => set.id === workflowPreset)?.workflowStages.map((stage) => ({ ...stage })) ?? (workspace?.workflowStages?.length ? workspace.workflowStages.map((stage) => ({ ...stage })) : stagesForPreset(workflowPreset)),
-      terminology: workflowSets?.find((set) => set.id === workflowPreset)?.terminology ?? workspace?.terminology ?? terminologyForPreset(workflowPreset),
+      workflowSetId: selectedWorkflowSet?.id,
+      workflowStages: selectedWorkflowSet?.workflowStages.map((stage) => ({ ...stage })) ?? stagesForPreset(workflowPreset),
+      terminology: selectedWorkflowSet?.terminology ?? terminologyForPreset(workflowPreset),
       status: 'planning',
       color: PROJECT_COLORS[Math.floor(Math.random() * PROJECT_COLORS.length)],
       createdAt: new Date().toISOString(),
@@ -91,6 +101,44 @@ export function WorkspaceDetailPage() {
     setDescription('')
     setWorkflowPreset('general')
     setReviewerId('unassigned')
+    navigate(`../projects/${projectId}?view=settings`)
+  }
+
+  function openProjectCreator() {
+    if (!workspace) return
+    const defaultPreset = WORKFLOW_PRESETS[workspace.workflowPreset ?? ''] ? workspace.workflowPreset! : 'general'
+    setName('')
+    setDescription('')
+    setWorkflowPreset(defaultPreset)
+    setReviewerId('unassigned')
+    setOpen(true)
+  }
+
+  function openWorkspaceEditor() {
+    if (!workspace) return
+    setEditName(workspace.name)
+    setEditDescription(workspace.description ?? '')
+    setEditTeamId(workspace.teamId ?? 'unassigned')
+    setEditWorkflowPreset(WORKFLOW_PRESETS[workspace.workflowPreset ?? ''] ? workspace.workflowPreset! : 'general')
+    setEditOpen(true)
+  }
+
+  async function saveWorkspace() {
+    if (!workspace || !canManage || !editName.trim()) return
+    setSavingWorkspace(true)
+    try {
+      await db.workspaces.update(workspace.id, {
+        name: editName.trim(),
+        description: editDescription.trim() || undefined,
+        teamId: editTeamId === 'unassigned' ? undefined : editTeamId,
+        workflowPreset: editWorkflowPreset,
+        workflowStages: stagesForPreset(editWorkflowPreset),
+        terminology: terminologyForPreset(editWorkflowPreset),
+      })
+      setEditOpen(false)
+    } finally {
+      setSavingWorkspace(false)
+    }
   }
 
   if (workspace === undefined) return <LoadingScreen />
@@ -117,13 +165,21 @@ export function WorkspaceDetailPage() {
         }
         description={workspace.description}
         actions={
-          <LimitButton
-            plan={plan}
-            limitKey="projects"
-            current={usage?.projects ?? 0}
-            label="New project"
-            onClick={() => setOpen(true)}
-          />
+          <>
+            {canManage && (
+              <Button variant="outline" onClick={openWorkspaceEditor}>
+                <Pencil aria-hidden="true" className="size-4" />
+                Edit workspace
+              </Button>
+            )}
+            <LimitButton
+              plan={plan}
+              limitKey="projects"
+              current={usage?.projects ?? 0}
+              label="New project"
+              onClick={openProjectCreator}
+            />
+          </>
         }
       />
       <AnnouncementsAlert workspaceId={workspace.id} />
@@ -142,25 +198,25 @@ export function WorkspaceDetailPage() {
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {projects.map((p) => {
               const tasks = allTasks?.filter((task) => task.projectId === p.id) ?? []
-              const approved = tasks.filter((task) => task.status === 'done' && task.reviewState === 'approved').length
+              const stages = workflowStages(p)
+              const finalStageId = stages.at(-1)?.id ?? 'done'
+              const reviewStageIds = new Set(stages.filter((stage) => stage.requiresReview).map((stage) => stage.id))
+              const approved = tasks.filter((task) => task.status === finalStageId && (reviewStageIds.size === 0 || task.reviewState === 'approved')).length
               const hasReviewRisk = tasks.some((task) =>
-                (task.status === 'in_review' && (!task.reviewerId || task.reviewerId === task.assigneeId)) ||
-                (task.status === 'done' && task.reviewState !== 'approved'),
+                (reviewStageIds.has(task.status) && (!task.reviewerId || task.reviewerId === task.assigneeId)) ||
+                (task.status === finalStageId && reviewStageIds.size > 0 && task.reviewState !== 'approved'),
               )
               const needsAttention = tasks.some((task) =>
-                task.status !== 'done' && (!task.assigneeId || Boolean(task.dueDate && new Date(task.dueDate).getTime() < WORKSPACE_VIEW_TIME)),
+                task.status !== finalStageId && (!task.assigneeId || Boolean(task.dueDate && new Date(task.dueDate).getTime() < WORKSPACE_VIEW_TIME)),
               )
-              const scheduleHealth = calculateScheduleHealth(p.startDate, p.endDate, calculateTaskProgress(tasks))
+              const scheduleHealth = calculateScheduleHealth(p.startDate, p.endDate, calculateTaskProgress(tasks, finalStageId))
               const liveStatus = tasks.length === 0 ? 'Not started' : approved === tasks.length ? 'Complete' : scheduleHealth ? (scheduleHealth.delayPercentage > 0 ? `${scheduleHealth.delayPercentage}% behind schedule` : SCHEDULE_HEALTH_LABEL[scheduleHealth.status]) : hasReviewRisk ? 'Review risk' : needsAttention ? 'Needs attention' : 'On track'
               const liveVariant = scheduleHealth && tasks.length > 0 && approved !== tasks.length
                 ? SCHEDULE_HEALTH_VARIANT[scheduleHealth.status]
                 : liveStatus === 'Complete' || liveStatus === 'On track' ? 'success' : liveStatus === 'Not started' ? 'secondary' : 'warning'
               return (
-              <Card
-                key={p.id}
-                className="cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-md"
-                onClick={() => navigate(`../projects/${p.id}`)}
-              >
+              <Link key={p.id} to={`../projects/${p.id}`} className="rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2">
+              <Card className="h-full cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:shadow-md">
                 <CardHeader className="flex-row items-start justify-between space-y-0">
                   <div className="flex items-center gap-2">
                     <span className="size-3 shrink-0 rounded-full" style={{ backgroundColor: p.color }} />
@@ -177,6 +233,7 @@ export function WorkspaceDetailPage() {
                   <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary" style={{ width: `${tasks.length ? Math.round((approved / tasks.length) * 100) : 0}%` }} /></div>
                 </CardContent>
               </Card>
+              </Link>
               )
             })}
               </div>
@@ -188,7 +245,7 @@ export function WorkspaceDetailPage() {
             title="No projects yet"
             description="Create your first project in this workspace."
             actionLabel="New project"
-            onAction={() => setOpen(true)}
+            onAction={openProjectCreator}
           />
         )}
       </TabsContent>
@@ -198,6 +255,57 @@ export function WorkspaceDetailPage() {
       <TabsContent value="pinned" className="mt-0 flex-1 overflow-y-auto"><PinsAndAnnouncements orgId={org.id} currentUser={currentUser} workspaceId={workspace.id} canAnnounce={canManageOrg(myMembership)} /></TabsContent>
       <TabsContent value="links" className="mt-0 flex-1 overflow-y-auto p-6"><LinksManager orgId={org.id} currentUser={currentUser} workspaceId={workspace.id} /></TabsContent>
       </Tabs>
+
+      <Dialog open={editOpen} onOpenChange={(nextOpen) => { if (!savingWorkspace) setEditOpen(nextOpen) }}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] max-w-xl overflow-y-auto p-6 sm:p-8">
+          <DialogHeader>
+            <DialogTitle>Edit workspace</DialogTitle>
+            <DialogDescription>Update this project group. Changes to the default workflow apply only to projects created after you save.</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-workspace-name">Workspace name <span className="text-destructive">*</span></Label>
+              <Input id="edit-workspace-name" autoFocus value={editName} onChange={(event) => setEditName(event.target.value)} />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-workspace-description">Description</Label>
+              <textarea
+                id="edit-workspace-description"
+                value={editDescription}
+                onChange={(event) => setEditDescription(event.target.value)}
+                rows={4}
+                className="w-full resize-y rounded-lg border border-border bg-card px-3 py-2 text-sm shadow-xs outline-none placeholder:text-muted-foreground focus-visible:border-primary focus-visible:ring-3 focus-visible:ring-primary/20"
+                placeholder="What kind of work belongs here?"
+              />
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="edit-workspace-team">Assigned team</Label>
+                <Select value={editTeamId} onValueChange={setEditTeamId}>
+                  <SelectTrigger id="edit-workspace-team"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="unassigned">No assigned team</SelectItem>
+                    {teams?.map((team) => <SelectItem key={team.id} value={team.id}>{team.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">The assigned team becomes available for project work and ticket assignment.</p>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="edit-workspace-workflow">Default workflow</Label>
+                <Select value={editWorkflowPreset} onValueChange={setEditWorkflowPreset}>
+                  <SelectTrigger id="edit-workspace-workflow"><SelectValue /></SelectTrigger>
+                  <SelectContent>{Object.entries(WORKFLOW_PRESETS).map(([value, preset]) => <SelectItem key={value} value={value}>{preset.name}</SelectItem>)}</SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">Used as the starting point for new projects; current projects are unchanged.</p>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setEditOpen(false)} disabled={savingWorkspace}>Cancel</Button>
+            <Button type="button" onClick={() => void saveWorkspace()} disabled={savingWorkspace || !editName.trim()}>{savingWorkspace ? 'Saving…' : 'Save changes'}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
@@ -216,12 +324,12 @@ export function WorkspaceDetailPage() {
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="flex flex-col gap-2">
-                <Label>Initial workflow</Label>
+                <Label htmlFor="project-workflow">Initial workflow</Label>
                 <Select value={workflowPreset} onValueChange={setWorkflowPreset}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger id="project-workflow"><SelectValue /></SelectTrigger>
                   <SelectContent>{Object.entries(WORKFLOW_PRESETS).map(([value, preset]) => <SelectItem key={value} value={value}>{preset.name}</SelectItem>)}{workflowSets?.length ? <><SelectItem value="reusable-templates" disabled>Reusable templates</SelectItem>{workflowSets.map((set) => <SelectItem key={set.id} value={set.id}>{set.name}</SelectItem>)}</> : null}</SelectContent>
                 </Select>
-                <p className="text-xs text-muted-foreground">{workflowSets?.find((set) => set.id === workflowPreset) ? 'This project will stay linked to the reusable template and receive future template updates.' : `${WORKFLOW_PRESETS[workflowPreset].description} This creates custom project settings that you can maintain later in Settings → Project settings.`}</p>
+                <p className="text-xs text-muted-foreground">{workflowSets?.find((set) => set.id === workflowPreset) ? 'This project will stay linked to the reusable template and receive future template updates.' : `${WORKFLOW_PRESETS[workflowPreset].description} This creates custom settings you can maintain from the project’s Settings tab.`}</p>
               </div>
               <div className="flex flex-col gap-2">
                 <Label>Independent reviewer</Label>

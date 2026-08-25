@@ -13,6 +13,7 @@ import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { StatCard } from '@/components/shared/stat-card'
 import { calculateScheduleHealth, calculateTaskProgress } from '@/lib/schedule-health'
+import { workflowStages } from '@/lib/project-workflow'
 import type { Project, Task } from '@/types/domain'
 
 type ProjectHealth = 'on_track' | 'at_risk' | 'delayed' | 'complete' | 'not_started' | 'archived'
@@ -41,7 +42,7 @@ const HEALTH_DETAILS: Record<
 
 function getProjectCompletion(project: Project, tasks: Task[]) {
   if (project.status === 'completed') return 100
-  return calculateTaskProgress(tasks)
+  return calculateTaskProgress(tasks, workflowStages(project).at(-1)?.id)
 }
 
 function getProjectHealth(project: Project, tasks: Task[], completion: number, now: Date): ProjectHealth {
@@ -53,10 +54,13 @@ function getProjectHealth(project: Project, tasks: Task[], completion: number, n
   if (scheduleHealth?.status === 'delayed') return 'delayed'
   if (scheduleHealth?.status === 'at_risk') return 'at_risk'
 
+  const stages = workflowStages(project)
+  const finalStage = stages.at(-1)?.id
+  const reviewStages = new Set(stages.filter((stage) => stage.requiresReview).map((stage) => stage.id))
   const hasDeliveryRisk = tasks.some((task) =>
-    (task.status !== 'done' && Boolean(task.dueDate && new Date(task.dueDate).getTime() < now.getTime())) ||
-    (task.status === 'in_review' && (!task.reviewerId || task.reviewerId === task.assigneeId)) ||
-    (task.status === 'done' && task.reviewState !== 'approved'),
+    (task.status !== finalStage && Boolean(task.dueDate && new Date(task.dueDate).getTime() < now.getTime())) ||
+    (reviewStages.has(task.status) && (!task.reviewerId || task.reviewerId === task.assigneeId)) ||
+    (task.status === finalStage && reviewStages.size > 0 && task.reviewState !== 'approved'),
   )
 
   return hasDeliveryRisk ? 'at_risk' : 'on_track'

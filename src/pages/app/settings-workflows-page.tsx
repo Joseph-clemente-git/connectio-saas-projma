@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useOutletContext } from 'react-router-dom'
+import { useOutletContext, useSearchParams } from 'react-router-dom'
 import { useLiveQuery } from 'dexie-react-hooks'
 import {
   CheckCircle2,
@@ -60,13 +60,15 @@ type PendingAction = 'save' | 'apply' | 'delete' | null
 
 export function SettingsWorkflowsPage() {
   const { org, user } = useOutletContext<TenantOutletContext>()
+  const [searchParams, setSearchParams] = useSearchParams()
   const projects = useLiveQuery(() => db.projects.where('orgId').equals(org.id).toArray(), [org.id])
   const workflowSets = useLiveQuery(() => db.workflowSets.where('orgId').equals(org.id).sortBy('name'), [org.id])
   const members = useOrgMembersWithUsers(org.id)
   const membership = useOrgMemberRole(org.id, user.id)
   const canManage = canManageOrg(membership)
 
-  const [activeView, setActiveView] = useState<SettingsView>('templates')
+  const requestedView = searchParams.get('view')
+  const activeView: SettingsView = requestedView === 'custom' ? 'custom' : 'templates'
   const [selectedSetId, setSelectedSetId] = useState('')
   const [projectId, setProjectId] = useState('')
   const [applyProjectId, setApplyProjectId] = useState('')
@@ -206,7 +208,7 @@ export function SettingsWorkflowsPage() {
           : undefined}
       />
 
-      <Tabs value={activeView} onValueChange={(value) => { setActiveView(value as SettingsView); setNotice('') }} className="flex min-w-0 flex-1 flex-col">
+      <Tabs value={activeView} onValueChange={(value) => { const next = new URLSearchParams(searchParams); if (value === 'templates') next.delete('view'); else next.set('view', value); setSearchParams(next); setNotice('') }} className="flex min-w-0 flex-1 flex-col">
         <div className="border-b border-border bg-card px-4 sm:px-6">
           <TabsList aria-label="Project settings sections" className="h-auto w-full justify-start gap-1 overflow-x-auto rounded-none bg-transparent p-0 sm:w-auto">
             <TabsTrigger value="templates" className="min-h-12 rounded-none border-b-2 border-transparent px-3 data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none">

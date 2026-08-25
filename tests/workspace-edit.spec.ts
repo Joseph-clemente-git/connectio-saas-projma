@@ -1,0 +1,51 @@
+import { expect, test } from '@playwright/test'
+
+test('an organization owner can edit workspace details and defaults', async ({ page }) => {
+  test.setTimeout(60_000)
+  await page.goto('/register')
+  await page.getByLabel('Full name').fill('Workspace Owner')
+  await page.getByLabel('Email address').fill('workspace-owner@connectio.test')
+  await page.getByLabel('Password', { exact: true }).fill('Workspace!2026')
+  await page.getByLabel('Confirm password').fill('Workspace!2026')
+  await page.getByRole('button', { name: 'Create account' }).click()
+
+  const verificationCode = await page.locator('strong.font-mono').textContent()
+  await page.getByLabel('Verification code').fill(verificationCode ?? '')
+  await page.getByRole('button', { name: 'Verify email' }).click()
+  await page.locator('#login-password').fill('Workspace!2026')
+  await page.getByRole('button', { name: 'Sign in' }).click()
+
+  await page.getByLabel('Organization name').fill('Workspace Studio')
+  await page.getByRole('button', { name: 'Create organization' }).click()
+  await page.getByRole('button', { name: 'Select Pro' }).click()
+  await page.getByLabel('Workspace name').fill('Client Delivery')
+  await page.getByRole('button', { name: 'Create workspace' }).click()
+  await page.getByRole('button', { name: 'Skip for now' }).click()
+
+  await page.getByRole('link', { name: 'Workspaces' }).click()
+  await page.getByText('Client Delivery', { exact: true }).click()
+  await page.getByRole('button', { name: 'Edit workspace' }).click()
+  await page.getByLabel('Workspace name').fill('Customer Delivery')
+  await page.getByLabel('Description').fill('Projects delivered for customer teams.')
+  await page.getByLabel('Default workflow').click()
+  await page.getByRole('option', { name: 'Software delivery' }).click()
+  await page.getByRole('button', { name: 'Save changes' }).click()
+
+  await expect(page.getByRole('dialog')).not.toBeVisible()
+  await expect(page.getByText('Customer Delivery', { exact: true })).toBeVisible()
+  await expect(page.locator('h1').locator('..').getByText('Projects delivered for customer teams.', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Edit workspace' }).click()
+  await expect(page.getByLabel('Workspace name')).toHaveValue('Customer Delivery')
+  await expect(page.getByLabel('Default workflow')).toHaveText(/Software delivery/)
+  await page.getByRole('button', { name: 'Close' }).click()
+
+  await page.getByRole('button', { name: 'New project' }).first().click()
+  await expect(page.getByLabel('Initial workflow')).toHaveText(/Software delivery/)
+  await page.getByLabel('Name', { exact: true }).fill('Customer Portal')
+  await page.getByRole('button', { name: 'Create project' }).click()
+
+  await expect(page.getByRole('heading', { name: 'Project settings' })).toBeVisible()
+  await page.getByRole('tab', { name: 'Workflow', exact: true }).click()
+  await expect(page.getByLabel('Stage 3 name')).toHaveValue('Development')
+  await expect(page.getByLabel('Stage 5 name')).toHaveValue('Production')
+})

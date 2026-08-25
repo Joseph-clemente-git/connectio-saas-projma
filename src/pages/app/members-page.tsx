@@ -41,7 +41,7 @@ export function MembersPage() {
   const [email, setEmail] = useState('')
   const [role, setRole] = useState<'admin' | 'member'>('member')
   const [canReview, setCanReview] = useState(false)
-  const [inviteResult, setInviteResult] = useState<{ email: string; temporaryPassword?: string; loginUrl: string } | null>(null)
+  const [inviteResult, setInviteResult] = useState<{ email: string; temporaryPassword?: string; invitationUrl: string } | null>(null)
   const [inviteError, setInviteError] = useState('')
 
   const [editOpen, setEditOpen] = useState(false)
@@ -63,8 +63,8 @@ export function MembersPage() {
     setInviteError('')
     try {
       const result = await provisionInvitedMember({ orgId: org.id, inviterId: currentUser.id, name, email, role, workspaceIds: workspaces?.map((workspace) => workspace.id), canReview: role === 'member' && showReviewer ? canReview : undefined })
-      const loginUrl = `${window.location.origin}/login?email=${encodeURIComponent(result.user.email)}`
-      setInviteResult({ email: result.user.email, temporaryPassword: result.temporaryPassword, loginUrl })
+      const invitationUrl = `${window.location.origin}/invite/${encodeURIComponent(result.token)}`
+      setInviteResult({ email: result.user.email, temporaryPassword: result.temporaryPassword, invitationUrl })
       await db.auditLogs.add({ id: crypto.randomUUID(), orgId: org.id, actorName: currentUser.name, action: 'invited organization member', target: result.user.email, createdAt: new Date().toISOString() })
     } catch (cause) {
       setInviteError(cause instanceof Error ? cause.message : 'Unable to create this invitation.')
@@ -256,7 +256,7 @@ export function MembersPage() {
         <DialogContent className="max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Invite member</DialogTitle>
-            <DialogDescription>Add the member now. New users receive a temporary password that they must replace the first time they sign in.</DialogDescription>
+            <DialogDescription>Create a secure invitation link. Membership is granted only after the recipient accepts and creates a private password.</DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-4">
             <div className="flex flex-col gap-2">
@@ -287,7 +287,7 @@ export function MembersPage() {
               </label>
             )}
             {inviteError && <div role="alert" className="rounded-lg border border-destructive/20 bg-destructive/5 p-3 text-sm text-destructive">{inviteError}</div>}
-            {inviteResult && <div className="rounded-lg border border-success/20 bg-success/5 p-4" role="status"><p className="text-sm font-semibold text-foreground">Member invited successfully</p>{inviteResult.temporaryPassword ? <><p className="mt-1 text-xs leading-5 text-muted-foreground">Copy these details now and share them securely. The temporary password is shown only here and must be changed at first sign-in.</p><div className="mt-3 grid gap-3"><div><Label htmlFor="invited-login-url" className="text-xs">Login page</Label><div className="mt-1 flex gap-2"><Input id="invited-login-url" readOnly value={inviteResult.loginUrl} className="h-10 text-xs" /><Button type="button" variant="outline" size="icon" onClick={() => void navigator.clipboard.writeText(inviteResult.loginUrl)} aria-label="Copy login page"><Clipboard /></Button></div></div><div><Label htmlFor="temporary-password" className="text-xs">Temporary password</Label><div className="mt-1 flex gap-2"><Input id="temporary-password" readOnly value={inviteResult.temporaryPassword} className="h-10 font-mono text-sm" /><Button type="button" variant="outline" size="icon" onClick={() => void navigator.clipboard.writeText(inviteResult.temporaryPassword ?? '')} aria-label="Copy temporary password"><Clipboard /></Button></div></div><Button type="button" variant="outline" className="w-full" onClick={() => void navigator.clipboard.writeText(`Connectio login: ${inviteResult.loginUrl}\nEmail: ${inviteResult.email}\nTemporary password: ${inviteResult.temporaryPassword}`)}><Clipboard />Copy all sign-in details</Button></div></> : <p className="mt-1 text-xs leading-5 text-muted-foreground">This email already has a Connectio account, so the member can sign in with their existing password.</p>}</div>}
+            {inviteResult && <div className="rounded-lg border border-success/20 bg-success/5 p-4" role="status"><p className="text-sm font-semibold text-foreground">Invitation ready to share</p><p className="mt-1 text-xs leading-5 text-muted-foreground">The recipient reviews the invitation, selects Accept invitation, then creates a new password before entering the organization.</p><div className="mt-3 grid gap-3"><div><Label htmlFor="invitation-url" className="text-xs">Invitation link</Label><div className="mt-1 flex gap-2"><Input id="invitation-url" readOnly value={inviteResult.invitationUrl} className="h-10 text-xs" /><Button type="button" variant="outline" size="icon" onClick={() => void navigator.clipboard.writeText(inviteResult.invitationUrl)} aria-label="Copy invitation link"><Clipboard /></Button></div></div>{inviteResult.temporaryPassword && <div><Label htmlFor="temporary-password" className="text-xs">Temporary password</Label><div className="mt-1 flex gap-2"><Input id="temporary-password" readOnly value={inviteResult.temporaryPassword} className="h-10 font-mono text-sm" /><Button type="button" variant="outline" size="icon" onClick={() => void navigator.clipboard.writeText(inviteResult.temporaryPassword ?? '')} aria-label="Copy temporary password"><Clipboard /></Button></div><p className="mt-1 text-xs text-muted-foreground">Fallback sign-in credential. It cannot be used to bypass the required new-password step.</p></div>}<Button type="button" variant="outline" className="w-full" onClick={() => void navigator.clipboard.writeText(`Connectio invitation: ${inviteResult.invitationUrl}\nEmail: ${inviteResult.email}${inviteResult.temporaryPassword ? `\nTemporary password: ${inviteResult.temporaryPassword}` : ''}`)}><Clipboard />Copy invitation details</Button></div></div>}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setOpen(false)}>
