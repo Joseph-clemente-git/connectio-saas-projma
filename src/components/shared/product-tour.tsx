@@ -5,6 +5,7 @@ import { db } from '@/db/schema'
 import { stagesForPreset, terminologyForPreset } from '@/lib/project-workflow'
 import { Button } from '@/components/ui/button'
 import type { Organization, User } from '@/types/domain'
+import { projectCodePrefix } from '@/lib/task-code'
 
 interface TourContext {
   workspaceId: string
@@ -256,6 +257,7 @@ export function ProductTour({ org, user, membershipRole }: { org: Organization; 
           orgId: org.id,
           workspaceId: workspace.id,
           name: 'Getting started',
+          taskCodePrefix: projectCodePrefix('Getting started'),
           description: 'A real project created for the Connectio guided tutorial.',
           leadId: user.id,
           coordinatorId: user.id,

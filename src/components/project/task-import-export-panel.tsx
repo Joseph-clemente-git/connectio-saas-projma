@@ -9,9 +9,10 @@ import { Label } from '@/components/ui/label'
 import { useOrgMembersWithUsers } from '@/hooks/use-session-data'
 import type { Project, Task, TaskPriority } from '@/types/domain'
 import { workflowStages } from '@/lib/project-workflow'
+import { nextTaskCode } from '@/lib/task-code'
 
 const fields = [
-  ['id', 'Task ID'], ['title', 'Title'], ['description', 'Description'], ['status', 'Status'],
+  ['title', 'Title'], ['description', 'Description'], ['status', 'Status'],
   ['assignee', 'Assignee'], ['priority', 'Priority'], ['startDate', 'Start date'], ['dueDate', 'Due date'],
   ['sprint', 'Sprint'], ['milestone', 'Milestone'], ['completion', 'Completion'], ['labels', 'Labels'],
 ] as const
@@ -20,7 +21,7 @@ type Row = Record<string, unknown>
 type PreparedRow = { row: Row; values: Partial<Record<Field, string>>; errors: string[] }
 
 const sample = [{
-  'Task ID': 'TASK-001', Title: 'Plan onboarding workshop', Description: 'Confirm agenda and participants.', Status: 'backlog', Assignee: '', Priority: 'medium',
+  Title: 'Plan onboarding workshop', Description: 'Confirm agenda and participants.', Status: 'backlog', Assignee: '', Priority: 'medium',
   'Start date': '2026-09-01', 'Due date': '2026-09-05', Sprint: 'Sprint 1', Milestone: 'Launch', Completion: '0', Labels: 'onboarding, planning',
 }]
 
@@ -96,7 +97,7 @@ export function TaskImportExportPanel({ project, orgId, currentUserId, canManage
         const assignee = members?.find((entry) => [entry.user.id, entry.user.name, entry.user.email].some((value) => value.toLowerCase() === values.assignee?.toLowerCase()))?.user
         const sprint = sprints?.find((item) => [item.id, item.name].some((value) => value.toLowerCase() === values.sprint?.toLowerCase()))
         const milestone = milestones?.find((item) => [item.id, item.name].some((value) => value.toLowerCase() === values.milestone?.toLowerCase()))
-        return { id: values.id || crypto.randomUUID(), projectId: project.id, title: values.title!, description: values.description || undefined, status: values.status || initialStageId, priority: (values.priority?.toLowerCase() as TaskPriority) || 'medium', assigneeId: assignee?.id, sprintId: sprint?.id, milestoneId: sprint?.milestoneId ? undefined : milestone?.id, startDate: dateValue(values.startDate), dueDate: dateValue(values.dueDate), completion: values.completion ? Number(values.completion) : undefined, labels: values.labels ? values.labels.split(',').map((label) => label.trim()).filter(Boolean) : undefined, createdById: currentUserId, order: startOrder + index, createdAt: now }
+        return { id: crypto.randomUUID(), code: nextTaskCode(project, tasks ?? [], index), projectId: project.id, title: values.title!, description: values.description || undefined, status: values.status || initialStageId, priority: (values.priority?.toLowerCase() as TaskPriority) || 'medium', assigneeId: assignee?.id, sprintId: sprint?.id, milestoneId: sprint?.milestoneId ? undefined : milestone?.id, startDate: dateValue(values.startDate), dueDate: dateValue(values.dueDate), completion: values.completion ? Number(values.completion) : undefined, labels: values.labels ? values.labels.split(',').map((label) => label.trim()).filter(Boolean) : undefined, createdById: currentUserId, order: startOrder + index, createdAt: now }
       }))
       await db.auditLogs.add({ id: crypto.randomUUID(), orgId, actorName: members?.find((entry) => entry.user.id === currentUserId)?.user.name ?? 'Unknown member', action: `imported ${validRows.length} task${validRows.length === 1 ? '' : 's'} from ${fileName}`, target: project.name, createdAt: now })
     })
@@ -106,7 +107,7 @@ export function TaskImportExportPanel({ project, orgId, currentUserId, canManage
 
   function exportTasks(type: 'csv' | 'xlsx') {
     const rows = (tasks ?? []).map((task) => ({
-      'Task ID': task.id, Title: task.title, Description: task.description ?? '', Status: task.status,
+      'Work item code': task.code, Title: task.title, Description: task.description ?? '', Status: task.status,
       Assignee: members?.find((entry) => entry.user.id === task.assigneeId)?.user.name ?? '', Priority: task.priority,
       'Start date': task.startDate?.slice(0, 10) ?? '', 'Due date': task.dueDate?.slice(0, 10) ?? '', Sprint: sprints?.find((item) => item.id === task.sprintId)?.name ?? '', Milestone: milestones?.find((item) => item.id === (sprints?.find((sprint) => sprint.id === task.sprintId)?.milestoneId ?? task.milestoneId))?.name ?? '', Completion: task.completion ?? (task.status === finalStageId ? 100 : 0), Labels: task.labels?.join(', ') ?? '',
     }))
@@ -124,7 +125,7 @@ export function TaskImportExportPanel({ project, orgId, currentUserId, canManage
         {!canManage && <p className="text-xs text-muted-foreground">Only project managers can import tasks.</p>}
         <div className="rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground"><Info className="mr-1 inline size-3.5" />Title is required. Assignee, sprint, and milestone can be matched by either name or ID.</div>
       </CardContent></Card>
-      <Card><CardHeader><CardTitle className="flex items-center gap-2 text-base"><FileSpreadsheet className="size-4 text-primary" />Export tasks</CardTitle></CardHeader><CardContent className="space-y-4"><p className="text-sm text-muted-foreground">Export all {tasks?.length ?? 0} project tasks with IDs, people, workflow, dates, planning links, completion, and labels.</p><div className="flex flex-wrap gap-2"><Button onClick={() => exportTasks('xlsx')}><Download />Export Excel</Button><Button variant="outline" onClick={() => exportTasks('csv')}><Download />Export CSV</Button></div></CardContent></Card>
+      <Card><CardHeader><CardTitle className="flex items-center gap-2 text-base"><FileSpreadsheet className="size-4 text-primary" />Export tasks</CardTitle></CardHeader><CardContent className="space-y-4"><p className="text-sm text-muted-foreground">Export all {tasks?.length ?? 0} project tasks with readable codes, people, workflow, dates, planning links, completion, and labels.</p><div className="flex flex-wrap gap-2"><Button onClick={() => exportTasks('xlsx')}><Download />Export Excel</Button><Button variant="outline" onClick={() => exportTasks('csv')}><Download />Export CSV</Button></div></CardContent></Card>
     </div>
     {sourceRows.length > 0 && <Card><CardHeader><CardTitle className="text-base">Map and review {fileName}</CardTitle></CardHeader><CardContent className="space-y-5">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{fields.map(([key, label]) => <div key={key} className="space-y-1"><Label htmlFor={`map-${key}`} className="text-xs">{label}{key === 'title' && ' *'}</Label><select id={`map-${key}`} value={mapping[key] ?? ''} onChange={(event) => setMapping((value) => ({ ...value, [key]: event.target.value }))} className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"><option value="">Do not import</option>{headers.map((header) => <option key={header} value={header}>{header}</option>)}</select></div>)}</div>

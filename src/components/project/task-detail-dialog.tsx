@@ -15,6 +15,7 @@ import { useOrgMembersWithUsers } from '@/hooks/use-session-data'
 import { eligibleReviewerIds, reviewStageForTask, workflowStages } from '@/lib/project-workflow'
 import { LinkifiedText } from '@/components/shared/linkified-text'
 import type { Project, Task, TaskPriority, TaskStatus } from '@/types/domain'
+import { displayTaskCode } from '@/lib/task-code'
 
 const PRIORITY_OPTIONS: { value: TaskPriority; label: string }[] = [
   { value: 'low', label: 'Low' },
@@ -240,6 +241,10 @@ export function TaskDetailDialog({
       <DialogContent data-tour="task-detail" className="max-h-[90vh] max-w-2xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="sr-only">Edit task</DialogTitle>
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span className="inline-flex whitespace-nowrap rounded-md bg-muted px-2 py-0.5 font-mono font-semibold tracking-wide">{displayTaskCode(task, project)}</span>
+            <span className="truncate">{project.name}</span>
+          </div>
           <Input
             disabled={!canCoordinateTask}
             value={title}

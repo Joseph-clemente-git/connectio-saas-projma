@@ -4,7 +4,7 @@ import { db } from '@/db/schema'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { StatCard } from '@/components/shared/stat-card'
 import { CheckCircle2, Clock, ShieldCheck, TicketCheck } from 'lucide-react'
-import { TICKET_STATUS_LABEL } from '@/lib/ticket-ui'
+import { TICKET_PROCESS_LABEL, ticketProcessStatus } from '@/lib/ticket-ui'
 import type { ReportLevel } from '@/lib/plans'
 
 const CHART_COLORS = ['#2563EB', '#EA580C', '#16A34A', '#7C3AED', '#DC2626']
@@ -14,19 +14,19 @@ export function TicketReportsTab({ orgId, level }: { orgId: string; level: Repor
 
   if (!tickets) return null
 
-  const byStatus = Object.entries(TICKET_STATUS_LABEL).map(([status, label]) => ({
+  const byProcess = Object.entries(TICKET_PROCESS_LABEL).map(([status, label]) => ({
     label,
-    count: tickets.filter((t) => t.status === status).length,
+    count: tickets.filter((ticket) => ticketProcessStatus(ticket) === status).length,
   }))
   const byPriority = ['low', 'medium', 'high', 'urgent'].map((p) => ({
     name: p,
     value: tickets.filter((t) => t.priority === p).length,
   }))
-  const resolved = tickets.filter((t) => t.status === 'resolved' || t.status === 'closed')
-  const avgResolutionHrs = resolved.length
+  const decided = tickets.filter((ticket) => ticket.approval !== 'pending')
+  const avgDecisionHrs = decided.length
     ? Math.round(
-        resolved.reduce((sum, t) => sum + (new Date(t.updatedAt).getTime() - new Date(t.createdAt).getTime()), 0) /
-          resolved.length /
+        decided.reduce((sum, ticket) => sum + (new Date(ticket.updatedAt).getTime() - new Date(ticket.createdAt).getTime()), 0) /
+          decided.length /
           3_600_000,
       )
     : 0
@@ -35,18 +35,18 @@ export function TicketReportsTab({ orgId, level }: { orgId: string; level: Repor
     <div className="flex flex-col gap-6">
       <div className="grid gap-4 sm:grid-cols-3">
         <StatCard label="Total tickets" value={tickets.length} icon={TicketCheck} />
-        <StatCard label="Resolved" value={resolved.length} icon={CheckCircle2} accent="success" />
-        <StatCard label="Avg. resolution time" value={`${avgResolutionHrs}h`} icon={Clock} accent="warning" />
+        <StatCard label="Decided" value={decided.length} icon={CheckCircle2} accent="success" />
+        <StatCard label="Avg. decision time" value={`${avgDecisionHrs}h`} icon={Clock} accent="warning" />
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>Tickets by status</CardTitle>
+            <CardTitle>Tickets by process status</CardTitle>
           </CardHeader>
           <CardContent className="h-64">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={byStatus}>
+              <BarChart data={byProcess}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" vertical={false} />
                 <XAxis dataKey="label" tick={{ fontSize: 11, fill: 'var(--color-muted-foreground)' }} axisLine={false} tickLine={false} />
                 <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: 'var(--color-muted-foreground)' }} axisLine={false} tickLine={false} />
@@ -94,7 +94,7 @@ export function TicketReportsTab({ orgId, level }: { orgId: string; level: Repor
             </p>
             <div className="flex items-center gap-6">
               {(['urgent', 'high', 'medium', 'low'] as const).map((p) => {
-                const relevant = resolved.filter((t) => t.priority === p)
+                const relevant = decided.filter((ticket) => ticket.priority === p)
                 const compliance = relevant.length ? Math.round(60 + Math.random() * 35) : 0
                 return (
                   <div key={p} className="flex flex-1 flex-col items-center gap-2">

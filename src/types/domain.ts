@@ -268,6 +268,8 @@ export interface Project {
   orgId: ID
   workspaceId: ID
   name: string
+  /** Stable prefix used for human-facing work-item codes, e.g. SCMS-001. */
+  taskCodePrefix?: string
   description?: string
   /** The org member accountable for this project ("project lead"). */
   leadId?: ID
@@ -409,6 +411,10 @@ export type TaskReviewState = 'pending' | 'approved' | 'changes_requested'
 
 export interface Task {
   id: ID
+  /** Stable human-facing identifier. The UUID id remains internal. */
+  code?: string
+  /** The approved client request this work item was copied from. */
+  sourceTicketId?: ID
   projectId: ID
   sprintId?: ID
   title: string
@@ -513,7 +519,7 @@ export type TicketPriority = 'low' | 'medium' | 'high' | 'urgent'
  * Every ticket is a request from the org's own client, scoped to one of the
  * org's projects — not a request directed at Connectio itself. `approval`
  * gates whether it becomes a Task: a member reviews a pending ticket and
- * either approves it (creating a task, assigned to a member) or rejects it.
+ * either approves it (creating an unassigned project task) or rejects it.
  */
 export type TicketApproval = 'pending' | 'approved' | 'rejected'
 

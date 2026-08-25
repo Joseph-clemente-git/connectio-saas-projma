@@ -28,6 +28,7 @@ import { RecurringReportsPanel } from '@/components/shared/recurring-reports-pan
 import { ReleaseNotesPanel } from '@/components/project/release-notes-panel'
 import { calculateScheduleHealth, calculateTaskProgress, SCHEDULE_HEALTH_LABEL, SCHEDULE_HEALTH_VARIANT } from '@/lib/schedule-health'
 import { WorkspaceProjectOverview } from '@/components/project/workspace-project-overview'
+import { projectCodePrefix } from '@/lib/task-code'
 
 const STATUS_VARIANT: Record<ProjectStatus, 'default' | 'secondary' | 'success' | 'warning' | 'outline'> = {
   planning: 'secondary',
@@ -84,6 +85,7 @@ export function WorkspaceDetailPage() {
       orgId: org.id,
       workspaceId,
       name: name.trim(),
+      taskCodePrefix: projectCodePrefix(name.trim()),
       description: description.trim() || undefined,
       leadId: currentUser.id,
       coordinatorId: currentUser.id,

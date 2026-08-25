@@ -44,6 +44,7 @@ import type {
   BillingLifecycleEvent,
 } from '@/types/domain'
 import type { PlanConfig } from '@/lib/plans'
+import { formatTaskCode, projectCodePrefix } from '@/lib/task-code'
 
 export interface FeatureFlag {
   id: string
@@ -256,6 +257,35 @@ export class ConnectioDB extends Dexie {
 
     this.version(17).stores({
       billingEvents: 'id, correlationId, orgId, userId, invoiceId, paymentId, event, status, createdAt',
+    })
+
+    // v18: UUIDs remain internal while every task receives a stable, readable
+    // project-scoped code such as SCMS-001.
+    this.version(18).stores({
+      tasks: 'id, projectId, sprintId, status, assigneeId, code, [projectId+code]',
+    }).upgrade(async (transaction) => {
+      const projects = await transaction.table('projects').toArray() as Project[]
+      const tasks = await transaction.table('tasks').toArray() as Task[]
+      const tasksByProject = new Map<string, Task[]>()
+
+      for (const task of tasks) {
+        const projectTasks = tasksByProject.get(task.projectId) ?? []
+        projectTasks.push(task)
+        tasksByProject.set(task.projectId, projectTasks)
+      }
+
+      for (const project of projects) {
+        const prefix = project.taskCodePrefix ?? projectCodePrefix(project.name)
+        if (!project.taskCodePrefix) await transaction.table('projects').update(project.id, { taskCodePrefix: prefix })
+
+        const projectTasks = (tasksByProject.get(project.id) ?? []).sort((a, b) =>
+          a.createdAt.localeCompare(b.createdAt) || a.order - b.order || a.id.localeCompare(b.id),
+        )
+        for (let index = 0; index < projectTasks.length; index += 1) {
+          const task = projectTasks[index]
+          if (!task.code) await transaction.table('tasks').update(task.id, { code: formatTaskCode(prefix, index + 1) })
+        }
+      }
     })
   }
 }

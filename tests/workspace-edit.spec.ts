@@ -24,6 +24,7 @@ test('an organization owner can edit workspace details and defaults', async ({ p
 
   await page.getByRole('link', { name: 'Workspaces' }).click()
   await page.getByText('Client Delivery', { exact: true }).click()
+  await page.getByRole('button', { name: 'Skip tutorial' }).click()
   await page.getByRole('button', { name: 'Edit workspace' }).click()
   await page.getByLabel('Workspace name').fill('Customer Delivery')
   await page.getByLabel('Description').fill('Projects delivered for customer teams.')

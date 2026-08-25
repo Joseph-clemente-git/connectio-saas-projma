@@ -329,7 +329,7 @@ export function ProjectDetailPage() {
         </TabsContent>
 
         <TabsContent value="board" className="flex flex-1 flex-col">
-          <KanbanBoard project={project} orgId={org.id} currentUserId={currentUser.id} canManage={canEditTasks} />
+          <KanbanBoard project={project} orgId={org.id} currentUserId={currentUser.id} canManage={canManageProject} />
         </TabsContent>
 
         <TabsContent value="task-data" className="mt-0 flex-1 overflow-y-auto">

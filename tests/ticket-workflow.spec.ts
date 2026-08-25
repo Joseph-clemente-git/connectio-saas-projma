@@ -1,0 +1,58 @@
+import { expect, test } from '@playwright/test'
+
+test('approving a ticket creates an unassigned task that is visible on the board', async ({ page }) => {
+  test.setTimeout(90_000)
+  await page.goto('/register')
+  await page.getByLabel('Full name').fill('Ticket Owner')
+  await page.getByLabel('Email address').fill('ticket-owner@connectio.test')
+  await page.getByLabel('Password', { exact: true }).fill('TicketFlow!2026')
+  await page.getByLabel('Confirm password').fill('TicketFlow!2026')
+  await page.getByRole('button', { name: 'Create account' }).click()
+
+  const verificationCode = await page.locator('strong.font-mono').textContent()
+  await page.getByLabel('Verification code').fill(verificationCode ?? '')
+  await page.getByRole('button', { name: 'Verify email' }).click()
+  await page.locator('#login-password').fill('TicketFlow!2026')
+  await page.getByRole('button', { name: 'Sign in' }).click()
+
+  await page.getByLabel('Organization name').fill('Ticket Flow Studio')
+  await page.getByRole('button', { name: 'Create organization' }).click()
+  await page.getByRole('button', { name: 'Select Pro' }).click()
+  await page.getByLabel('Workspace name').fill('Client Delivery')
+  await page.getByRole('button', { name: 'Create workspace' }).click()
+  await page.getByRole('button', { name: 'Skip for now' }).click()
+
+  await page.getByRole('link', { name: 'Workspaces' }).click()
+  await page.getByText('Client Delivery', { exact: true }).click()
+  await page.getByRole('button', { name: 'New project' }).first().click()
+  await page.getByLabel('Name', { exact: true }).fill('Client Portal')
+  await page.getByRole('button', { name: 'Create project' }).click()
+  await page.getByRole('button', { name: 'Skip tutorial' }).click()
+
+  await page.getByRole('link', { name: 'Tickets' }).click()
+  await page.getByRole('button', { name: 'New ticket' }).click()
+  await page.getByRole('dialog').getByRole('combobox').first().click()
+  await page.getByRole('option', { name: 'Client Portal' }).click()
+  await page.getByLabel('Client name').fill('Jane Client')
+  await page.getByLabel('Client email').fill('jane@client.test')
+  await page.getByLabel('Subject').fill('Add team members')
+  await page.getByLabel('Description').fill('Create three new client team member accounts.')
+  await page.getByRole('button', { name: 'Create ticket' }).click()
+
+  await page.getByText('Add team members', { exact: true }).click()
+  await expect(page.getByText('Process status', { exact: true })).toBeVisible()
+  await expect(page.getByText('Pending review', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText('Status', { exact: true })).toHaveCount(0)
+
+  await page.getByRole('button', { name: 'Approve', exact: true }).click()
+  await expect(page.getByRole('dialog').getByText(/unassigned task/)).toBeVisible()
+  await expect(page.getByRole('dialog').getByText(/Assign to project member/)).toHaveCount(0)
+  await page.getByRole('button', { name: 'Approve & create task' }).click()
+
+  await expect(page.getByText('Converted to task')).toBeVisible()
+  await expect(page.getByText(/is unassigned in/)).toBeVisible()
+  await page.getByRole('link', { name: 'Open board task' }).click()
+  await expect(page).toHaveURL(/\/projects\/.*\?view=board&task=/)
+  await expect(page.getByRole('dialog').locator('input').first()).toHaveValue('Add team members')
+  await expect(page.getByRole('dialog').getByText('Unassigned', { exact: true })).toBeVisible()
+})

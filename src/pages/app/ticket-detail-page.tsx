@@ -3,7 +3,7 @@ import { useOutletContext, useParams, Link } from 'react-router-dom'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { format, formatDistanceToNow } from 'date-fns'
 import {
-  AlertTriangle, ArrowLeft, CheckCircle2, ChevronRight, Clock3, Globe, Mail, Paperclip, Send, Ticket as TicketIcon, Trash2, X, RotateCcw,
+  AlertTriangle, ArrowLeft, CheckCircle2, ChevronRight, Clock3, ExternalLink, Globe, Mail, Paperclip, Send, Ticket as TicketIcon, Trash2, X, RotateCcw,
 } from 'lucide-react'
 import { db } from '@/db/schema'
 import type { TenantOutletContext } from '@/layouts/tenant-app-layout'
@@ -20,8 +20,10 @@ import { Label } from '@/components/ui/label'
 import { useOrgMembersWithUsers, useOrgMemberRole } from '@/hooks/use-session-data'
 import { hasFeature } from '@/lib/entitlements'
 import { canReviewTickets } from '@/lib/permissions'
-import { TICKET_APPROVAL_LABEL, TICKET_APPROVAL_VARIANT, TICKET_PRIORITY_LABEL, TICKET_STATUS_LABEL } from '@/lib/ticket-ui'
-import type { TicketPriority, TicketStatus } from '@/types/domain'
+import { TICKET_PRIORITY_LABEL, TICKET_PROCESS_LABEL, TICKET_PROCESS_VARIANT, ticketProcessStatus } from '@/lib/ticket-ui'
+import type { TicketPriority } from '@/types/domain'
+import { displayTaskCode, nextTaskCode } from '@/lib/task-code'
+import { workflowStages } from '@/lib/project-workflow'
 
 export function TicketDetailPage() {
   const { org, user: currentUser, plan } = useOutletContext<TenantOutletContext>()
@@ -33,11 +35,9 @@ export function TicketDetailPage() {
   const attachments = useLiveQuery(() => (ticketId ? db.ticketAttachments.where('ticketId').equals(ticketId).toArray() : []), [ticketId])
   const activities = useLiveQuery(() => (ticketId ? db.ticketActivities.where('ticketId').equals(ticketId).sortBy('createdAt') : []), [ticketId])
   const project = useLiveQuery(() => (ticket ? db.projects.get(ticket.projectId) : undefined), [ticket?.projectId])
-  const workspace = useLiveQuery(() => (project?.workspaceId ? db.workspaces.get(project.workspaceId) : undefined), [project?.workspaceId])
-  const projectTeam = useLiveQuery(() => (workspace?.teamId ? db.teams.get(workspace.teamId) : undefined), [workspace?.teamId])
+  const convertedTask = useLiveQuery(() => (ticket?.convertedTaskId ? db.tasks.get(ticket.convertedTaskId) : undefined), [ticket?.convertedTaskId])
   const escalationOwner = useLiveQuery(() => (ticket?.escalatedToUserId ? db.users.get(ticket.escalatedToUserId) : undefined), [ticket?.escalatedToUserId])
   const members = useOrgMembersWithUsers(org.id)
-  const assignee = members?.find((m) => m.user.id === ticket?.assigneeId)?.user
   const myMembership = useOrgMemberRole(org.id, currentUser.id)
   const canReview = canReviewTickets(myMembership)
   const escalationApprovers = (members ?? []).filter(({ member, user }) => user.id === org.ownerId || (member.role === 'admin' && user.id !== currentUser.id))
@@ -45,12 +45,10 @@ export function TicketDetailPage() {
   const canDecideEscalation = ticket?.escalatedToUserId === currentUser.id && Boolean(ticket?.escalatedAt) && !ticket?.escalationApprovedAt
   const canReject = ticket?.escalatedAt ? canDecideEscalation : canReview
   const canApprove = ticket?.escalatedAt ? canDecideEscalation : canReview
-  const projectParticipantIds = new Set([project?.leadId, project?.coordinatorId, project?.reviewerId, ticket?.assigneeId, ...(projectTeam?.memberIds ?? [])].filter(Boolean))
-  const projectAssignees = (members ?? []).filter(({ user }) => projectParticipantIds.has(user.id))
 
   const [reply, setReply] = useState('')
   const [approveOpen, setApproveOpen] = useState(false)
-  const [approveAssigneeId, setApproveAssigneeId] = useState('')
+  const [approving, setApproving] = useState(false)
   const [rejectOpen, setRejectOpen] = useState(false)
   const [rejectReason, setRejectReason] = useState('')
   const [escalateOpen, setEscalateOpen] = useState(false)
@@ -81,7 +79,6 @@ export function TicketDetailPage() {
       internal: false,
       createdAt: new Date().toISOString(),
     })
-    patch({ status: ticket!.status === 'open' ? 'in_progress' : ticket!.status })
     setReply('')
   }
 
@@ -99,16 +96,47 @@ export function TicketDetailPage() {
   }
 
   async function approve() {
-    if (!approveAssigneeId || !ticketId || !ticket || !canApprove || !projectParticipantIds.has(approveAssigneeId)) return
+    if (!ticketId || !ticket || !project || !canApprove || ticket.convertedTaskId || approving) return
+    setApproving(true)
     const taskId = crypto.randomUUID()
     const now = new Date().toISOString()
-    await db.transaction('rw', [db.tasks, db.tickets, db.ticketActivities], async () => {
-      await db.tasks.add({ id: taskId, projectId: ticket.projectId, title: ticket.subject, description: ticket.description, status: 'todo', priority: ticket.priority, assigneeId: approveAssigneeId, order: 0, createdAt: now })
-      await db.tickets.update(ticketId, { approval: 'approved', assigneeId: approveAssigneeId, convertedTaskId: taskId, ...(ticket.escalatedAt ? { escalationApprovedAt: now } : {}), status: ticket.status === 'open' ? 'in_progress' : ticket.status, updatedAt: now })
-      await db.ticketActivities.add({ id: crypto.randomUUID(), ticketId, type: ticket.escalatedAt ? 'escalation_approved' : 'approved', actorName: currentUser.name, description: ticket.escalatedAt ? 'Approved the escalation and created a task.' : 'Approved the ticket and created a task.', createdAt: now })
-    })
-    setApproveOpen(false)
-    setApproveAssigneeId('')
+    const intakeStage = workflowStages(project)[0]
+    try {
+      await db.transaction('rw', [db.tasks, db.taskAttachments, db.tickets, db.ticketAttachments, db.ticketActivities], async () => {
+        const [projectTasks, ticketAttachments] = await Promise.all([
+          db.tasks.where('projectId').equals(ticket.projectId).toArray(),
+          db.ticketAttachments.where('ticketId').equals(ticket.id).toArray(),
+        ])
+        await db.tasks.add({
+          id: taskId,
+          code: nextTaskCode(project, projectTasks),
+          sourceTicketId: ticket.id,
+          projectId: ticket.projectId,
+          title: ticket.subject,
+          description: ticket.description,
+          status: intakeStage?.id ?? 'backlog',
+          priority: ticket.priority,
+          createdById: currentUser.id,
+          order: projectTasks.filter((task) => task.status === (intakeStage?.id ?? 'backlog')).length,
+          createdAt: now,
+        })
+        if (ticketAttachments.length) {
+          await db.taskAttachments.bulkAdd(ticketAttachments.map((attachment) => ({
+            id: crypto.randomUUID(),
+            taskId,
+            fileName: attachment.fileName,
+            size: attachment.size,
+            mimeType: attachment.mimeType,
+            createdAt: now,
+          })))
+        }
+        await db.tickets.update(ticketId, { approval: 'approved', convertedTaskId: taskId, ...(ticket.escalatedAt ? { escalationApprovedAt: now } : {}), status: 'resolved', updatedAt: now })
+        await db.ticketActivities.add({ id: crypto.randomUUID(), ticketId, type: ticket.escalatedAt ? 'escalation_approved' : 'approved', actorName: currentUser.name, description: `Approved and copied to the ${intakeStage?.name ?? 'board intake'} as an unassigned task.`, createdAt: now })
+      })
+      setApproveOpen(false)
+    } finally {
+      setApproving(false)
+    }
   }
 
   function reject() {
@@ -119,7 +147,7 @@ export function TicketDetailPage() {
   }
 
   function reopen() {
-    patch({ approval: 'pending', approvalNote: undefined, escalatedAt: undefined, escalationReason: undefined, escalatedByUserId: undefined, escalatedToUserId: undefined, escalationApprovedAt: undefined })
+    patch({ approval: 'pending', approvalNote: undefined, status: 'open', escalatedAt: undefined, escalationReason: undefined, escalatedByUserId: undefined, escalatedToUserId: undefined, escalationApprovedAt: undefined })
   }
 
   async function escalate() {
@@ -127,13 +155,15 @@ export function TicketDetailPage() {
     const now = new Date().toISOString()
     const approver = members?.find(({ user }) => user.id === escalationApproverId)?.user
     await db.transaction('rw', [db.tickets, db.ticketActivities], async () => {
-      await db.tickets.update(ticketId, { escalatedAt: now, escalationReason: escalationReason.trim(), escalatedByUserId: currentUser.id, escalatedToUserId: escalationApproverId, updatedAt: now })
+      await db.tickets.update(ticketId, { status: 'waiting', escalatedAt: now, escalationReason: escalationReason.trim(), escalatedByUserId: currentUser.id, escalatedToUserId: escalationApproverId, updatedAt: now })
       await db.ticketActivities.add({ id: crypto.randomUUID(), ticketId, type: 'escalated', actorName: currentUser.name, description: `Escalated for approval to ${approver?.name ?? 'the organization decision-maker'}. Reason: ${escalationReason.trim()}`, createdAt: now })
     })
     setEscalateOpen(false)
     setEscalationReason('')
     setEscalationApproverId('')
   }
+
+  const processStatus = ticketProcessStatus(ticket)
 
   return (
     <div className="flex flex-1 flex-col">
@@ -160,8 +190,7 @@ export function TicketDetailPage() {
                 <Globe className="size-3" /> Client portal
               </Badge>
             )}
-            {ticket.escalatedAt && <Badge variant="warning" className="gap-1"><AlertTriangle className="size-3" aria-hidden="true" /> Escalated</Badge>}
-            <Badge variant={TICKET_APPROVAL_VARIANT[ticket.approval]}>{TICKET_APPROVAL_LABEL[ticket.approval]}</Badge>
+            <Badge variant={TICKET_PROCESS_VARIANT[processStatus]}>{TICKET_PROCESS_LABEL[processStatus]}</Badge>
           </div>
         }
       />
@@ -184,7 +213,7 @@ export function TicketDetailPage() {
                   <div className="sm:col-span-2"><p className="text-xs font-medium text-muted-foreground">Request</p><p className="mt-1 font-medium text-foreground">{ticket.subject}</p><p className="mt-1 text-muted-foreground">{ticket.description || 'No description provided.'}</p></div>
                   <div className="sm:col-span-2"><p className="text-xs font-medium text-muted-foreground">Reason for escalation</p><p className="mt-1 whitespace-pre-wrap text-foreground">{ticket.escalationReason}</p></div>
                 </div>
-                <div className="flex flex-wrap gap-4 border-t border-warning/20 pt-3 text-xs text-muted-foreground"><span>{comments?.length ?? 0} conversation message{comments?.length === 1 ? '' : 's'}</span><span>{attachments?.length ?? 0} attachment{attachments?.length === 1 ? '' : 's'}</span><span>Status: {TICKET_STATUS_LABEL[ticket.status]}</span></div>
+                <div className="flex flex-wrap gap-4 border-t border-warning/20 pt-3 text-xs text-muted-foreground"><span>{comments?.length ?? 0} conversation message{comments?.length === 1 ? '' : 's'}</span><span>{attachments?.length ?? 0} attachment{attachments?.length === 1 ? '' : 's'}</span></div>
               </CardContent>
             </Card>
           )}
@@ -248,21 +277,6 @@ export function TicketDetailPage() {
           <Card>
             <CardContent className="flex flex-col gap-4 py-5">
               <div className="flex flex-col gap-1.5">
-                <span className="text-xs font-medium text-muted-foreground">Status</span>
-                <Select value={ticket.status} onValueChange={(v) => patch({ status: v as TicketStatus })}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {Object.entries(TICKET_STATUS_LABEL).map(([v, l]) => (
-                      <SelectItem key={v} value={v}>
-                        {l}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="flex flex-col gap-1.5">
                 <span className="text-xs font-medium text-muted-foreground">Priority</span>
                 <Select value={ticket.priority} onValueChange={(v) => patch({ priority: v as TicketPriority })}>
                   <SelectTrigger>
@@ -324,8 +338,8 @@ export function TicketDetailPage() {
             <Card>
               <CardContent className="flex flex-col gap-3 py-5">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-muted-foreground">Approval</span>
-                  <Badge variant={TICKET_APPROVAL_VARIANT[ticket.approval]}>{TICKET_APPROVAL_LABEL[ticket.approval]}</Badge>
+                  <span className="text-xs font-medium text-muted-foreground">Process status</span>
+                  <Badge variant={TICKET_PROCESS_VARIANT[processStatus]}>{TICKET_PROCESS_LABEL[processStatus]}</Badge>
                 </div>
 
                 {ticket.approval === 'pending' && !ticket.escalatedAt && (
@@ -336,21 +350,19 @@ export function TicketDetailPage() {
 
                 {ticket.approval === 'pending' && ticket.escalatedAt && !ticket.escalationApprovedAt && (
                   canDecideEscalation ? (
-                    <><p className="text-xs text-muted-foreground">You are the designated decision-maker. Approval creates a project task and assigns it to a member.</p><div className="flex gap-2"><Button size="sm" className="flex-1" onClick={() => setApproveOpen(true)}><CheckCircle2 className="size-4" /> Approve</Button><Button variant="outline" size="sm" className="flex-1" onClick={() => setRejectOpen(true)}><X className="size-4" /> Reject</Button></div></>
+                    <><p className="text-xs text-muted-foreground">You are the designated decision-maker. Approval copies this request to the project board for assignment.</p><div className="flex gap-2"><Button size="sm" className="flex-1" onClick={() => setApproveOpen(true)}><CheckCircle2 className="size-4" /> Approve</Button><Button variant="outline" size="sm" className="flex-1" onClick={() => setRejectOpen(true)}><X className="size-4" /> Reject</Button></div></>
                   ) : <p className="text-xs text-muted-foreground">Waiting for {escalationOwner?.name ?? 'the designated owner or representative'} to approve or reject this escalation.</p>
                 )}
 
                 {ticket.approval === 'approved' && (
-                  <div className="flex flex-col gap-1.5">
+                  <div className="flex flex-col gap-2">
                     <Badge variant="success" className="w-fit gap-1">
                       <CheckCircle2 className="size-3" /> Converted to task
                     </Badge>
-                    {assignee && (
-                      <div className="flex items-center gap-2 text-sm text-foreground">
-                        <InitialsAvatar name={assignee.name} color={assignee.avatarColor} className="size-6" />
-                        {assignee.name}
-                      </div>
-                    )}
+                    <p className="text-xs text-muted-foreground">{convertedTask && project ? `${displayTaskCode(convertedTask, project)} is unassigned in ${workflowStages(project)[0]?.name ?? 'board intake'}.` : 'The task is ready for assignment on the project board.'}</p>
+                    <Button asChild variant="outline" size="sm" className="w-fit">
+                      <Link to={`/app/${org.slug}/projects/${ticket.projectId}?view=board${ticket.convertedTaskId ? `&task=${ticket.convertedTaskId}` : ''}`}><ExternalLink className="size-3.5" aria-hidden="true" /> Open board task</Link>
+                    </Button>
                   </div>
                 )}
 
@@ -409,30 +421,14 @@ export function TicketDetailPage() {
           <DialogHeader>
             <DialogTitle>Approve ticket</DialogTitle>
             <DialogDescription>
-              Creates a task in {project?.name ?? 'this project'} and assigns it to a member involved in that project.
+              Copies the title, description, priority, and attachments to {project?.name ?? 'this project'} as an unassigned task. The project leader or coordinator can assign it from the board.
             </DialogDescription>
           </DialogHeader>
-          <div className="flex flex-col gap-2">
-            <Label>Assign to project member</Label>
-            <Select value={approveAssigneeId} onValueChange={setApproveAssigneeId}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select a member" />
-              </SelectTrigger>
-              <SelectContent>
-                {projectAssignees.map(({ user }) => (
-                  <SelectItem key={user.id} value={user.id}>
-                    {user.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {projectAssignees.length === 0 && <p className="text-xs text-destructive">No project members are available. Add a project lead, coordinator, reviewer, or workspace team member first.</p>}
-          </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setApproveOpen(false)}>
+            <Button variant="outline" onClick={() => setApproveOpen(false)} disabled={approving}>
               Cancel
             </Button>
-            <Button onClick={approve} disabled={!approveAssigneeId || !canApprove}>
+            <Button onClick={approve} disabled={!canApprove || approving}>
               Approve &amp; create task
             </Button>
           </DialogFooter>

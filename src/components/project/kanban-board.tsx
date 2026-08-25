@@ -14,6 +14,7 @@ import { DEFAULT_TERMINOLOGY, eligibleReviewerIds, reviewStageForTask, reviewerI
 import { extractLinks } from '@/components/shared/linkified-text'
 import type { Project, TaskPriority, TaskStatus } from '@/types/domain'
 import { format } from 'date-fns'
+import { displayTaskCode, nextTaskCode } from '@/lib/task-code'
 
 const PRIORITY_DOT: Record<TaskPriority, string> = {
   low: 'bg-muted-foreground/40',
@@ -72,7 +73,7 @@ export function KanbanBoard({
   const teams = useLiveQuery(() => db.teams.where('orgId').equals(orgId).toArray(), [orgId])
   const [searchParams] = useSearchParams()
 
-  const [activeTaskId, setActiveTaskId] = useState<string | null>(null)
+  const [activeTaskId, setActiveTaskId] = useState<string | null>(() => searchParams.get('task'))
   const [reviewTaskId, setReviewTaskId] = useState<string | null>(null)
   const [dragOverStatus, setDragOverStatus] = useState<TaskStatus | null>(null)
   const [addingIn, setAddingIn] = useState<TaskStatus | null>(null)
@@ -197,6 +198,7 @@ export function KanbanBoard({
     const taskId = crypto.randomUUID()
     await db.tasks.add({
       id: taskId,
+      code: nextTaskCode(project, tasks ?? []),
       projectId: project.id,
       sprintId: effectiveSprintId,
       title: newTitle.trim(),
@@ -235,7 +237,7 @@ export function KanbanBoard({
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-card px-6 py-3">
         <div data-tour="board-sprint" className="flex items-center gap-2 text-sm text-muted-foreground"><CalendarRange className="size-4 text-primary" /><span className="font-medium text-foreground">Viewing:</span>
           <select aria-label={`Choose ${terminology.timebox.toLowerCase()} to view`} className="h-9 rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none focus:ring-2 focus:ring-primary/30" value={effectiveSprintId ?? ''} onChange={(e) => setSelectedSprintId(e.target.value || null)}>
-            <option value="">All committed {terminology.timeboxPlural.toLowerCase()}</option>
+            <option value="">All work and intake</option>
             {sprints?.map((s) => <option key={s.id} value={s.id}>{s.name}{s.status === 'active' ? ' (active)' : ''}</option>)}
           </select>
         </div>
@@ -244,7 +246,11 @@ export function KanbanBoard({
       {boardNotice && <div role="alert" className="mx-6 mt-4 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning"><AlertCircle className="size-4" />{boardNotice}</div>}
       <div className="flex flex-1 gap-4 overflow-x-auto p-6">
       {columns.map((col) => {
-        const colTasks = tasks?.filter((t) => t.sprintId && (!effectiveSprintId || t.sprintId === effectiveSprintId) && t.status === col.status) ?? []
+        const colTasks = tasks?.filter((task) => {
+          if (task.status !== col.status) return false
+          if (task.sprintId) return !effectiveSprintId || task.sprintId === effectiveSprintId
+          return !effectiveSprintId && col.status === columns[0]?.status
+        }) ?? []
         return (
           <div
             key={col.status}
@@ -301,7 +307,7 @@ export function KanbanBoard({
                       canMoveTask ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer',
                     )}
                   >
-                    <div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className="text-xs font-medium text-muted-foreground">{task.id}</p><p className="mt-0.5 text-sm font-medium text-foreground">{task.title}</p></div>{task.isBlocked && <span className="flex shrink-0 items-center gap-1 rounded-full bg-destructive/10 px-1.5 py-0.5 text-[11px] font-medium text-destructive"><AlertCircle aria-hidden="true" className="size-3" />Blocked</span>}</div>
+                    <div className="flex items-start justify-between gap-2"><div className="min-w-0"><div className="flex flex-wrap items-center gap-1.5"><span className="inline-flex w-fit whitespace-nowrap rounded-md bg-muted px-2 py-0.5 font-mono text-[11px] font-semibold tracking-wide text-muted-foreground">{displayTaskCode(task, project)}</span>{!task.sprintId && <span className="text-[11px] font-medium text-warning">Unplanned intake</span>}</div><p className="mt-1.5 text-sm font-medium text-foreground">{task.title}</p></div>{task.isBlocked && <span className="flex shrink-0 items-center gap-1 rounded-full bg-destructive/10 px-1.5 py-0.5 text-[11px] font-medium text-destructive"><AlertCircle aria-hidden="true" className="size-3" />Blocked</span>}</div>
                     {task.isBlocked && <p className="rounded-md border border-destructive/20 bg-destructive/5 px-2 py-1.5 text-xs leading-5 text-foreground"><span className="font-medium text-destructive">Reason: </span>{task.blockerReason || 'Reason not added yet.'}</p>}
                     {(activity?.unread || activity?.attachments || activity?.links) ? <div className="flex flex-wrap gap-x-2 gap-y-1 text-xs text-muted-foreground" aria-label={`Task activity: ${activity.unread} unread comments, ${activity.attachments} files, ${activity.links} links`}>
                       {activity.unread > 0 && <span className="flex items-center gap-1 font-medium text-primary"><MessageCircle aria-hidden="true" className="size-3" />{activity.unread} unread</span>}
@@ -365,7 +371,7 @@ export function KanbanBoard({
         )
       })}
 
-      {tasks?.some((task) => !task.sprintId) && <div className="mx-6 mb-5 rounded-lg border border-border bg-muted/30 px-4 py-3 text-sm text-muted-foreground"><span className="font-semibold text-foreground">{tasks.filter((task) => !task.sprintId).length} unplanned {terminology.workItem.toLowerCase()}(s)</span> remain outside the delivery board. Assign them to a {terminology.timebox.toLowerCase()} before they enter active delivery.</div>}
+      {effectiveSprintId && tasks?.some((task) => !task.sprintId) && <div className="mx-6 mb-5 rounded-lg border border-border bg-muted/30 px-4 py-3 text-sm text-muted-foreground"><span className="font-semibold text-foreground">{tasks.filter((task) => !task.sprintId).length} intake {terminology.workItem.toLowerCase()}(s)</span> are hidden by this {terminology.timebox.toLowerCase()} filter. Choose “All work and intake” to review and assign them.</div>}
       <TaskDetailDialog
         taskId={activeTaskId}
         orgId={orgId}

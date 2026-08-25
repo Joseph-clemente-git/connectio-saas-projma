@@ -43,9 +43,11 @@ test('guided onboarding navigates the delivery flow and creates a real task', as
   await page.locator('[data-tour="task-title"]').fill('Publish onboarding checklist')
   await page.locator('[data-tour="task-title"]').press('Enter')
   await expect(page.getByText('Your task is live on the board')).toBeVisible()
+  await expect(page.locator('[data-tour-task]').filter({ hasText: 'Publish onboarding checklist' })).toContainText('GS-001')
   await page.getByRole('button', { name: 'Open task details' }).click()
 
   await expect(page.locator('[data-tour="task-detail"]')).toBeVisible()
+  await expect(page.locator('[data-tour="task-detail"]')).toContainText('GS-001')
   await page.getByRole('button', { name: 'Finish tutorial' }).click()
   await expect(page.getByText('You’re ready to deliver')).toBeVisible()
   await page.getByRole('button', { name: 'Done' }).click()
