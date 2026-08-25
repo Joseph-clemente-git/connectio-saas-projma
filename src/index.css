@@ -1,0 +1,115 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+@theme {
+  --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  --color-background: #f8fafc;
+  --color-foreground: #1e293b;
+  --color-card: #ffffff;
+  --color-card-foreground: #1e293b;
+  --color-popover: #ffffff;
+  --color-popover-foreground: #1e293b;
+
+  --color-primary: #2563eb;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #3b82f6;
+  --color-secondary-foreground: #000000;
+  --color-accent: #ea580c;
+  --color-accent-foreground: #000000;
+
+  --color-muted: #e9eff8;
+  --color-muted-foreground: #475569;
+  --color-border: #e2e8f0;
+  --color-input: #e2e8f0;
+  --color-ring: #2563eb;
+
+  --color-destructive: #dc2626;
+  --color-destructive-foreground: #ffffff;
+  --color-success: #16a34a;
+  --color-success-foreground: #ffffff;
+  --color-warning: #d97706;
+  --color-warning-foreground: #000000;
+
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+
+  --shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --shadow-md: 0 4px 6px rgba(15, 23, 42, 0.1);
+  --shadow-lg: 0 10px 15px rgba(15, 23, 42, 0.1);
+  --shadow-xl: 0 20px 25px rgba(15, 23, 42, 0.15);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  html {
+    color-scheme: light;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100svh;
+    background: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  #root {
+    min-height: 100svh;
+  }
+
+  ::selection {
+    background: color-mix(in srgb, var(--color-primary) 25%, transparent);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-ring);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer utilities {
+  .glass {
+    background: color-mix(in srgb, white 70%, transparent);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid color-mix(in srgb, white 40%, transparent);
+  }
+
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-border) transparent;
+  }
+}
+
+/* Messenger layout: explicit CSS prevents the list pane from expanding into the thread. */
+.chat-viber-page { display: grid; grid-template-columns: 320px minmax(0, 1fr); height: calc(100dvh - 4rem); max-height: calc(100dvh - 4rem); min-height: 0; flex: 1; overflow: hidden; background: var(--color-background); }
+.chat-viber-list { display:flex; min-width:0; min-height:0; flex-direction:column; overflow:hidden; border-right:1px solid var(--color-border); background:var(--color-card); }
+.chat-viber-list-header { display: flex; height: 72px; align-items: center; justify-content: space-between; padding: 0 16px; border-bottom: 1px solid var(--color-border); }
+.chat-viber-list-header h1 { font-size: 18px; font-weight: 700; }.chat-viber-list-header p { margin-top:2px; color:var(--color-muted-foreground); font-size:11px; }.chat-viber-list-header button { display:flex; align-items:center; justify-content:center; width:40px; height:40px; border-radius:10px; color:white; background:var(--color-primary); cursor:pointer; }.chat-viber-list-header svg,.chat-viber-composer svg { width:18px; height:18px; }
+.chat-viber-search,.chat-viber-picker-search { position:relative; padding:12px; }.chat-viber-search svg,.chat-viber-picker-search svg { position:absolute; left:24px; top:50%; width:16px; transform:translateY(-50%); color:var(--color-muted-foreground); }.chat-viber-search input,.chat-viber-picker-search input { padding-left:34px; }
+.chat-viber-items { min-height:0; flex:1; overflow-y:auto; overscroll-behavior-y:contain; scrollbar-gutter:stable; padding:0 8px 12px; }.chat-viber-section { margin-top:14px; }.chat-viber-section h2 { margin:0 8px 6px; color:var(--color-muted-foreground); font-size:11px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; }.chat-viber-section-empty { margin:0 8px; color:var(--color-muted-foreground); font-size:12px; }.chat-viber-row { display:flex; width:100%; gap:12px; align-items:center; padding:10px 8px; border-radius:10px; cursor:pointer; text-align:left; transition:background .2s; }.chat-viber-row:hover { background:var(--color-muted); }.chat-viber-row.active { background:color-mix(in srgb, var(--color-primary) 12%, white); }.chat-viber-row.unread b { color:var(--color-foreground); font-weight:800; }.chat-viber-avatar,.chat-viber-thread-icon { display:flex; align-items:center; justify-content:center; width:42px; height:42px; flex:0 0 42px; border-radius:50%; background:var(--color-primary); color:white; }.chat-viber-avatar.client,.chat-viber-thread-icon.client { background:color-mix(in srgb, #7c3aed 14%, white); color:#6d28d9; }.chat-viber-avatar svg,.chat-viber-thread-icon svg { width:18px; height:18px; }.chat-viber-row span:last-child,.chat-viber-thread-header span:last-child,.chat-viber-picker span { min-width:0; }.chat-viber-row b,.chat-viber-row small,.chat-viber-thread-header b,.chat-viber-thread-header small,.chat-viber-picker b,.chat-viber-picker small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.chat-viber-row b,.chat-viber-thread-header b,.chat-viber-picker b { font-size:14px; }.chat-viber-row small,.chat-viber-thread-header small,.chat-viber-picker small { margin-top:2px; color:var(--color-muted-foreground); font-size:12px; }.chat-viber-unread { width:8px; height:8px; min-width:8px!important; border-radius:50%; background:var(--color-accent); }
+.chat-viber-thread { display:flex; min-width:0; min-height:0; flex-direction:column; overflow:hidden; background:var(--color-background); }.chat-viber-thread-header { display:flex; height:72px; flex-shrink:0; align-items:center; gap:12px; padding:0 24px; border-bottom:1px solid var(--color-border); background:var(--color-card); }.chat-viber-thread-icon { background:color-mix(in srgb, var(--color-primary) 12%, white); color:var(--color-primary); }.chat-viber-private { display:flex; align-items:center; gap:5px; margin-left:auto; border-radius:999px; background:#f3e8ff; padding:5px 9px; color:#6d28d9; font-size:11px; font-weight:700; }.chat-viber-private svg { width:14px; }.chat-viber-messages { min-height:0; flex:1; overflow-y:auto; overscroll-behavior-y:contain; scrollbar-gutter:stable; padding:28px clamp(20px, 5vw, 80px); }.chat-viber-message { display:flex; max-width:70%; gap:10px; margin-bottom:16px; }.chat-viber-message > div { border:1px solid var(--color-border); border-radius:12px; padding:9px 12px; background:var(--color-card); font-size:14px; }.chat-viber-message b { font-size:12px; }.chat-viber-message b em { margin-left:6px; color:#6d28d9; font-size:10px; font-style:normal; }.chat-viber-message p { margin:4px 0 0; white-space:pre-wrap; }.chat-viber-message p a { color:var(--color-primary); text-decoration:underline; }.chat-viber-message p a svg { display:inline; width:12px; margin-left:3px; vertical-align:-2px; }.chat-viber-message-own p a { color:white; }.chat-viber-message-own { flex-direction:row-reverse; margin-left:auto; }.chat-viber-message-own > div { border-color:var(--color-primary); color:white; background:var(--color-primary); }.chat-viber-message-file { display:flex; align-items:center; gap:5px; margin-top:8px; border-radius:7px; background:var(--color-muted); padding:5px 7px; color:var(--color-foreground); font-size:12px; }.chat-viber-message-file svg { width:14px; }.chat-viber-message-file small { margin-left:auto; color:var(--color-muted-foreground); }.chat-viber-composer { display:flex; position:relative; flex-shrink:0; align-items:center; gap:8px; padding:14px 20px; border-top:1px solid var(--color-border); background:var(--color-card); }.chat-viber-composer > button { display:flex; align-items:center; justify-content:center; width:40px; height:40px; cursor:pointer; color:var(--color-muted-foreground); }.chat-viber-composer input:not([type=file]) { flex:1; }.chat-viber-file { position:absolute; left:70px; bottom:64px; display:flex; align-items:center; gap:4px; border-radius:6px; background:var(--color-muted); padding:4px 8px; font-size:12px; }.chat-viber-file button svg { width:12px; }
+.chat-viber-empty { display:flex; align-items:center; justify-content:center; color:var(--color-muted-foreground); }.chat-viber-tabs { display:flex; padding:4px; border-radius:8px; background:var(--color-muted); }.chat-viber-tabs button { flex:1; padding:8px; border-radius:6px; cursor:pointer; font-size:14px; font-weight:600; }.chat-viber-tabs button.active { background:var(--color-card); color:var(--color-primary); box-shadow:var(--shadow-sm); }.chat-viber-picker { max-height:240px; overflow:auto; border:1px solid var(--color-border); border-radius:8px; padding:4px; }.chat-viber-picker > button { display:flex; width:100%; align-items:center; gap:10px; padding:8px; border-radius:6px; cursor:pointer; text-align:left; }.chat-viber-picker > button:hover { background:var(--color-muted); }.chat-viber-picker > button > span { flex:1; }
+@media (max-width: 767px) { .chat-viber-page { grid-template-columns: 1fr; grid-template-rows: 42vh minmax(0,1fr); }.chat-viber-list { border-right:0; border-bottom:1px solid var(--color-border); }.chat-viber-messages { padding:20px; }.chat-viber-message { max-width:88%; } }
