@@ -1,5 +1,6 @@
 import { db } from '@/db/schema'
 import type { OrganizationInvitation, User } from '@/types/domain'
+import { recordBillingEvent } from '@/lib/billing-lifecycle'
 
 const PASSWORD_ITERATIONS = 310_000
 const SESSION_LIFETIME_MS = 7 * 24 * 60 * 60 * 1_000
@@ -63,7 +64,7 @@ export function validatePassword(password: string): string | null {
   return null
 }
 
-export async function createCredential(userId: string, password: string): Promise<void> {
+export async function createCredential(userId: string, password: string, mustChangePassword = false): Promise<void> {
   const salt = crypto.getRandomValues(new Uint8Array(16))
   const now = new Date().toISOString()
   await db.authCredentials.put({
@@ -74,6 +75,7 @@ export async function createCredential(userId: string, password: string): Promis
     iterations: PASSWORD_ITERATIONS,
     failedAttempts: 0,
     passwordChangedAt: now,
+    mustChangePassword,
   })
 }
 
@@ -118,13 +120,30 @@ export async function registerAccount(input: { name: string; email: string; pass
     createdAt: new Date().toISOString(),
   }
   await db.users.add(user)
+  const correlationId = crypto.randomUUID()
   try {
+    await recordBillingEvent({
+      correlationId, userId: user.id, event: 'registration.started', status: 'pending',
+      message: 'Account registration started.',
+    })
     await createCredential(user.id, input.password)
+    const developmentVerificationCode = await issueVerificationCode(user.id)
+    await recordBillingEvent({
+      correlationId, userId: user.id, event: 'registration.completed', status: 'succeeded',
+      message: 'Account registration completed; email verification is pending.',
+    })
+    return { user, developmentVerificationCode }
   } catch (cause) {
+    await recordBillingEvent({
+      correlationId, userId: user.id, event: 'registration.failed', status: 'failed',
+      message: 'Account registration failed.',
+    }).catch(() => undefined)
+    const verificationTokenIds = await db.verificationTokens.where('userId').equals(user.id).primaryKeys()
+    if (verificationTokenIds.length) await db.verificationTokens.bulkDelete(verificationTokenIds)
+    await db.authCredentials.delete(user.id)
     await db.users.delete(user.id)
     throw cause
   }
-  return { user, developmentVerificationCode: await issueVerificationCode(user.id) }
 }
 
 export async function resendVerification(emailInput: string): Promise<string | null> {
@@ -145,15 +164,21 @@ export async function verifyEmail(emailInput: string, code: string): Promise<voi
     throw new Error('The code is invalid or has expired.')
   }
   const now = new Date().toISOString()
-  await db.transaction('rw', [db.users, db.verificationTokens], async () => {
+  await db.transaction('rw', [db.users, db.verificationTokens, db.billingEvents], async () => {
     await db.verificationTokens.update(token.id, { usedAt: now })
     await db.users.update(user.id, { verificationStatus: 'verified', verifiedAt: now })
+    await db.billingEvents.add({
+      id: crypto.randomUUID(), correlationId: crypto.randomUUID(), userId: user.id,
+      event: 'registration.email_verified', status: 'succeeded',
+      message: 'Registration email verified.', createdAt: now,
+    })
   })
 }
 
 export interface AuthenticatedSession {
   user: User
   token: string
+  mustChangePassword: boolean
 }
 
 export async function authenticate(emailInput: string, password: string): Promise<AuthenticatedSession> {
@@ -187,7 +212,119 @@ export async function authenticate(emailInput: string, password: string): Promis
       expiresAt: new Date(now.getTime() + SESSION_LIFETIME_MS).toISOString(),
     })
   })
-  return { user, token }
+  return { user, token, mustChangePassword: credential.mustChangePassword === true }
+}
+
+function createTemporaryPassword(): string {
+  // Every generated password satisfies validatePassword() and uses a CSPRNG.
+  return `C!${randomToken(15)}a9`
+}
+
+export interface ProvisionedMemberResult {
+  user: User
+  temporaryPassword?: string
+  isNewAccount: boolean
+}
+
+/**
+ * Adds a member immediately. New accounts receive a one-time temporary password;
+ * existing Connectio accounts keep their current credentials.
+ */
+export async function provisionInvitedMember(input: {
+  orgId: string
+  inviterId: string
+  name: string
+  email: string
+  role: 'admin' | 'member'
+  workspaceIds?: string[]
+  canReview?: boolean
+}): Promise<ProvisionedMemberResult> {
+  const name = input.name.trim()
+  const email = normalizeEmail(input.email)
+  if (name.length < 2) throw new Error('Enter the member\'s full name.')
+  if (!/^\S+@\S+\.\S+$/.test(email)) throw new Error('Enter a valid email address.')
+
+  const organization = await db.organizations.get(input.orgId)
+  if (!organization) throw new Error('This organization no longer exists.')
+  const inviter = await db.orgMembers.where('[orgId+userId]').equals([input.orgId, input.inviterId]).first()
+  if (!inviter || (inviter.role !== 'owner' && inviter.role !== 'admin')) throw new Error('You do not have permission to invite members.')
+
+  const existingUser = await db.users.where('email').equals(email).first()
+  if (existingUser && await db.orgMembers.where('[orgId+userId]').equals([input.orgId, existingUser.id]).first()) {
+    throw new Error('This person is already a member.')
+  }
+
+  const now = new Date().toISOString()
+  const user: User = existingUser ?? {
+    id: crypto.randomUUID(),
+    name,
+    email,
+    avatarColor: '#2563EB',
+    role: 'member',
+    verificationStatus: 'verified',
+    verifiedAt: now,
+    createdAt: now,
+  }
+  const temporaryPassword = existingUser ? undefined : createTemporaryPassword()
+
+  if (!existingUser) {
+    await db.users.add(user)
+    try { await createCredential(user.id, temporaryPassword!, true) } catch (cause) {
+      await db.users.delete(user.id)
+      throw cause
+    }
+  }
+  try {
+    await db.transaction('rw', [db.orgMembers, db.invitations], async () => {
+      await db.orgMembers.add({
+        id: crypto.randomUUID(), orgId: input.orgId, userId: user.id, role: input.role,
+        teamIds: [], workspaceIds: input.workspaceIds ?? [], canReview: input.canReview, joinedAt: now,
+      })
+      const pendingIds = await db.invitations.where('orgId').equals(input.orgId)
+        .filter((entry) => entry.targetEmail === email && entry.status === 'pending')
+        .primaryKeys()
+      await Promise.all(pendingIds.map((id) => db.invitations.update(id, { status: 'revoked' })))
+    })
+  } catch (cause) {
+    if (!existingUser) {
+      await db.authCredentials.delete(user.id)
+      await db.users.delete(user.id)
+    }
+    throw cause
+  }
+
+  return { user, temporaryPassword, isNewAccount: !existingUser }
+}
+
+export async function replaceTemporaryPassword(input: {
+  userId: string
+  sessionToken: string
+  password: string
+}): Promise<void> {
+  const passwordError = validatePassword(input.password)
+  if (passwordError) throw new Error(passwordError)
+  const user = await validateSession(input.sessionToken, input.userId)
+  const credential = await db.authCredentials.get(input.userId)
+  if (!user || !credential || !credential.mustChangePassword) throw new Error('This password-change request is no longer valid.')
+  const candidate = await derivePasswordHash(input.password, base64ToBytes(credential.passwordSalt), credential.iterations)
+  if (constantTimeEqual(candidate, credential.passwordHash)) throw new Error('Choose a password different from the temporary password.')
+
+  const salt = crypto.getRandomValues(new Uint8Array(16))
+  const currentTokenHash = await sha256(input.sessionToken)
+  const passwordHash = await derivePasswordHash(input.password, salt)
+  await db.transaction('rw', [db.authCredentials, db.authSessions], async () => {
+    await db.authCredentials.update(input.userId, {
+      passwordHash,
+      passwordSalt: bytesToBase64(salt),
+      iterations: PASSWORD_ITERATIONS,
+      failedAttempts: 0,
+      lockedUntil: undefined,
+      passwordChangedAt: new Date().toISOString(),
+      mustChangePassword: false,
+    })
+    const sessions = await db.authSessions.where('userId').equals(input.userId).toArray()
+    await Promise.all(sessions.filter((session) => session.tokenHash !== currentTokenHash).map((session) => db.authSessions.delete(session.id)))
+  })
 }
 
 export async function validateSession(token: string | null, expectedUserId: string | null): Promise<User | null> {

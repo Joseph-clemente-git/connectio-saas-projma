@@ -1,7 +1,7 @@
 import { useLiveQuery } from 'dexie-react-hooks'
 import { useOutletContext } from 'react-router-dom'
 import { addDays, format } from 'date-fns'
-import { Check, CreditCard, DollarSign, LockKeyhole, ReceiptText, WalletCards } from 'lucide-react'
+import { Activity, Check, CreditCard, DollarSign, LockKeyhole, ReceiptText, WalletCards } from 'lucide-react'
 import type { TenantOutletContext } from '@/layouts/tenant-app-layout'
 import { PageHeader } from '@/components/shared/page-header'
 import { StatCard } from '@/components/shared/stat-card'
@@ -18,7 +18,7 @@ import { cn } from '@/lib/utils'
 import { setOrganizationPlan } from '@/lib/subscriptions'
 
 export function SettingsBillingPage() {
-  const { org } = useOutletContext<TenantOutletContext>()
+  const { org, user } = useOutletContext<TenantOutletContext>()
   const invoices = useLiveQuery(
     () => db.invoices.where('orgId').equals(org.id).reverse().sortBy('issuedAt'),
     [org.id],
@@ -26,6 +26,11 @@ export function SettingsBillingPage() {
   )
   const payments = useLiveQuery(
     () => db.payments.where('orgId').equals(org.id).reverse().sortBy('createdAt'),
+    [org.id],
+    [],
+  )
+  const billingEvents = useLiveQuery(
+    () => db.billingEvents.where('orgId').equals(org.id).reverse().sortBy('createdAt'),
     [org.id],
     [],
   )
@@ -80,7 +85,7 @@ export function SettingsBillingPage() {
                     <li className="flex items-center gap-2"><Check aria-hidden="true" className="size-4 text-primary" /> {limitLabel(option.limits.projects)} projects</li>
                     <li className="flex items-center gap-2"><Check aria-hidden="true" className="size-4 text-primary" /> {option.limits.storageGb} GB storage</li>
                   </ul>
-                  <Button variant={current ? 'outline' : 'accent'} disabled={current} onClick={() => void setOrganizationPlan(org.id, tier)}>
+                  <Button variant={current ? 'outline' : 'accent'} disabled={current} onClick={() => void setOrganizationPlan(org.id, tier, user.name)}>
                     {current ? 'Current plan' : tier === 'free' ? 'Switch to Free' : `Switch to ${option.name}`}
                   </Button>
                 </div>
@@ -96,7 +101,7 @@ export function SettingsBillingPage() {
                 <CardTitle>Billing records</CardTitle>
                 <CardDescription>Review invoices and payment activity for this organization.</CardDescription>
               </div>
-              <TabsList aria-label="Billing records" className="grid min-h-11 w-full grid-cols-2 sm:w-auto">
+              <TabsList aria-label="Billing records" className="grid min-h-11 w-full grid-cols-3 sm:w-auto">
                 <TabsTrigger value="invoices" className="min-h-9 px-3 sm:min-w-36">
                   <ReceiptText aria-hidden="true" className="size-4" />
                   Invoices
@@ -104,8 +109,13 @@ export function SettingsBillingPage() {
                 </TabsTrigger>
                 <TabsTrigger value="payments" className="min-h-9 px-3 sm:min-w-44">
                   <CreditCard aria-hidden="true" className="size-4" />
-                  Payment history
+                  Payments
                   <span className="rounded-full bg-background/80 px-1.5 py-0.5 text-[11px] tabular-nums">{payments.length}</span>
+                </TabsTrigger>
+                <TabsTrigger value="activity" className="min-h-9 px-3 sm:min-w-36">
+                  <Activity aria-hidden="true" className="size-4" />
+                  Activity
+                  <span className="rounded-full bg-background/80 px-1.5 py-0.5 text-[11px] tabular-nums">{billingEvents.length}</span>
                 </TabsTrigger>
               </TabsList>
             </CardHeader>
@@ -129,6 +139,28 @@ export function SettingsBillingPage() {
             <TabsContent value="payments" className="mt-0">
               <CardContent className="p-0">
                 {payments.length ? <div className="divide-y divide-border">{payments.map((payment) => <div key={payment.id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between sm:px-6"><div className="flex items-center gap-3"><div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground"><CreditCard aria-hidden="true" className="size-5" /></div><div><p className="font-medium text-foreground">{payment.methodBrand} ending in {payment.methodLast4}</p><p className="text-xs text-muted-foreground">{format(new Date(payment.createdAt), 'MMM d, yyyy · h:mm a')}</p></div></div><div className="flex items-center justify-between gap-4 pl-[3.25rem] sm:justify-end sm:pl-0"><span className="font-semibold text-foreground">{formatMoney(payment.amount)}</span><Badge variant={paymentStatusVariant(payment.status)}>{payment.status}</Badge></div></div>)}</div> : <EmptyState icon={CreditCard} title="No payments yet" description="Payment attempts will appear here after the first charge." />}
+              </CardContent>
+            </TabsContent>
+
+            <TabsContent value="activity" className="mt-0">
+              <CardContent className="p-0">
+                {billingEvents.length ? (
+                  <ol className="divide-y divide-border" aria-label="Billing lifecycle activity">
+                    {billingEvents.map((event) => (
+                      <li key={event.id} className="flex flex-col gap-2 p-4 sm:flex-row sm:items-start sm:justify-between sm:px-6">
+                        <div className="min-w-0">
+                          <p className="font-medium text-foreground">{event.message}</p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {event.event.replaceAll('.', ' ')} · {format(new Date(event.createdAt), 'MMM d, yyyy · h:mm a')}
+                          </p>
+                        </div>
+                        <Badge className="w-fit shrink-0" variant={event.status === 'failed' ? 'destructive' : event.status === 'pending' ? 'warning' : event.status === 'succeeded' ? 'success' : 'secondary'}>
+                          {event.status}
+                        </Badge>
+                      </li>
+                    ))}
+                  </ol>
+                ) : <EmptyState icon={Activity} title="No billing activity yet" description="Registration, subscription, invoice, and payment events will appear here." />}
               </CardContent>
             </TabsContent>
           </Card>

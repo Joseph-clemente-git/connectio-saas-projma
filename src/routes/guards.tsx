@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Navigate, Outlet, useOutletContext, useParams } from 'react-router-dom'
+import { Navigate, Outlet, useLocation, useOutletContext, useParams } from 'react-router-dom'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '@/db/schema'
 import { useSession } from '@/store/session'
@@ -9,19 +9,28 @@ import { validateSession } from '@/lib/auth'
 
 export function RequireAuth() {
   const { isAuthenticated, sessionToken, userId, signOut } = useSession()
-  const [valid, setValid] = useState<boolean | null>(null)
+  const location = useLocation()
+  const authKey = `${userId ?? ''}:${sessionToken ?? ''}`
+  const [authCheck, setAuthCheck] = useState<{ key: string; valid: boolean; mustChangePassword: boolean } | null>(null)
   useEffect(() => {
     let cancelled = false
-    void validateSession(sessionToken, userId).then((user) => {
+    void validateSession(sessionToken, userId).then(async (user) => {
       if (cancelled) return
-      setValid(Boolean(user))
+      const credential = user ? await db.authCredentials.get(user.id) : undefined
+      if (cancelled) return
+      setAuthCheck({ key: authKey, valid: Boolean(user), mustChangePassword: user ? credential?.mustChangePassword === true : false })
       if (!user) signOut()
     })
     return () => { cancelled = true }
-  }, [sessionToken, signOut, userId])
+  }, [authKey, sessionToken, signOut, userId])
   if (!isAuthenticated) return <Navigate to="/login" replace />
-  if (valid === null) return <LoadingScreen />
-  if (!valid) return <Navigate to="/login" replace />
+  if (!authCheck || authCheck.key !== authKey) return <LoadingScreen />
+  if (!authCheck.valid) return <Navigate to="/login" replace />
+  if (authCheck.mustChangePassword && location.pathname !== '/change-password') {
+    const next = `${location.pathname}${location.search}${location.hash}`
+    return <Navigate to={`/change-password?next=${encodeURIComponent(next)}`} replace />
+  }
+  if (!authCheck.mustChangePassword && location.pathname === '/change-password') return <Navigate to="/app" replace />
   return <Outlet />
 }
 

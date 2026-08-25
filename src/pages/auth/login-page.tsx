@@ -28,7 +28,8 @@ export function LoginPage() {
       const session = await authenticate(email, password)
       const membership = await db.orgMembers.where('userId').equals(session.user.id).first()
       signIn(session.user.id, membership?.orgId ?? null, session.token)
-      navigate(invite ? `/invite/${encodeURIComponent(invite)}` : '/app', { replace: true })
+      const destination = invite ? `/invite/${encodeURIComponent(invite)}` : '/app'
+      navigate(session.mustChangePassword ? `/change-password?next=${encodeURIComponent(destination)}` : destination, { replace: true })
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Unable to sign in.')
     } finally {

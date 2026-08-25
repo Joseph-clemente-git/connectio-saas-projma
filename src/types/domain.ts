@@ -41,6 +41,8 @@ export interface AuthCredential {
   failedAttempts: number
   lockedUntil?: string
   passwordChangedAt: string
+  /** Set for administrator-provisioned accounts until the member replaces the temporary password. */
+  mustChangePassword?: boolean
 }
 
 export interface AuthSession {
@@ -117,6 +119,36 @@ export interface Payment {
   methodLast4: string
   createdAt: string
   paidAt?: string
+}
+
+export type BillingEventStatus = 'info' | 'pending' | 'succeeded' | 'failed'
+
+/** Durable, non-sensitive trace of registration and billing lifecycle events. */
+export interface BillingLifecycleEvent {
+  id: ID
+  correlationId: ID
+  orgId?: ID
+  userId?: ID
+  invoiceId?: ID
+  paymentId?: ID
+  event:
+    | 'registration.started'
+    | 'registration.completed'
+    | 'registration.failed'
+    | 'registration.email_verified'
+    | 'organization.created'
+    | 'subscription.selected'
+    | 'subscription.activated'
+    | 'invoice.created'
+    | 'payment.required'
+    | 'payment.not_required'
+    | 'payment.attempt_started'
+    | 'payment.succeeded'
+    | 'payment.failed'
+    | 'onboarding.completed'
+  status: BillingEventStatus
+  message: string
+  createdAt: string
 }
 
 export interface OrgMember {

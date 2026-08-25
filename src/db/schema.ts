@@ -41,6 +41,7 @@ import type {
   VerificationToken,
   OrganizationSubscription,
   OrganizationInvitation,
+  BillingLifecycleEvent,
 } from '@/types/domain'
 import type { PlanConfig } from '@/lib/plans'
 
@@ -61,6 +62,7 @@ export class ConnectioDB extends Dexie {
   invitations!: EntityTable<OrganizationInvitation, 'id'>
   invoices!: EntityTable<Invoice, 'id'>
   payments!: EntityTable<Payment, 'id'>
+  billingEvents!: EntityTable<BillingLifecycleEvent, 'id'>
   orgMembers!: EntityTable<OrgMember, 'id'>
   teams!: EntityTable<Team, 'id'>
   workspaces!: EntityTable<Workspace, 'id'>
@@ -250,6 +252,10 @@ export class ConnectioDB extends Dexie {
       organizations: 'id, slug, plan, status, onboardingStep',
       subscriptions: 'id, &orgId, planId, status',
       invitations: 'id, orgId, targetEmail, tokenHash, status, expiresAt',
+    })
+
+    this.version(17).stores({
+      billingEvents: 'id, correlationId, orgId, userId, invoiceId, paymentId, event, status, createdAt',
     })
   }
 }

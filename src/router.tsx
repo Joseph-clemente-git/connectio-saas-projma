@@ -9,6 +9,7 @@ import { LoginPage } from '@/pages/auth/login-page'
 import { RegisterPage } from '@/pages/auth/register-page'
 import { VerifyEmailPage } from '@/pages/auth/verify-email-page'
 import { InvitationPage } from '@/pages/auth/invitation-page'
+import { ChangePasswordPage } from '@/pages/auth/change-password-page'
 import { OnboardingPage } from '@/pages/onboarding/onboarding-page'
 import { DashboardPage } from '@/pages/app/dashboard-page'
 import { TeamsPage } from '@/pages/app/teams-page'
@@ -51,6 +52,7 @@ export const router = createBrowserRouter([
   {
     element: <RequireAuth />,
     children: [
+      { path: '/change-password', element: <ChangePasswordPage /> },
       { path: '/app', element: <AppRootRedirect /> },
       { path: '/onboarding', element: <OnboardingPage /> },
       {

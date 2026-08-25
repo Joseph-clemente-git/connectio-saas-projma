@@ -71,7 +71,7 @@ export async function resetDatabase(): Promise<void> {
     db.ticketCategories, db.ticketAttachments, db.ticketComments, db.ticketActivities, db.slaPolicies,
     db.ticketAutomations, db.customTicketForms, db.apiKeys, db.auditLogs, db.chatConversations,
     db.chatMessages, db.chatReadStates, db.files, db.recurringReports, db.calendarEvents,
-    db.workflowSets, db.invoices, db.payments, db.invitations,
+    db.workflowSets, db.invoices, db.payments, db.billingEvents, db.invitations,
   ]
   const regularUsers = await db.users.filter((user) => user.role !== 'super_admin').toArray()
   const regularUserIds = regularUsers.map((user) => user.id)
